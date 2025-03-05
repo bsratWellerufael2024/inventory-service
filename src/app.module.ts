@@ -7,6 +7,7 @@ import { Inventory } from './entities/inventory.entity';
 import { StockMovement } from './entities/stock-movement.entity';
 import { InventoryService } from './services/inventory.service';
 import { ClientsModule,Transport } from '@nestjs/microservices';
+import { InventoryController } from './controllers/inventory.controller';
 @Module({
   imports: [
     ClientsModule.register([
@@ -39,7 +40,7 @@ import { ClientsModule,Transport } from '@nestjs/microservices';
       }),
     }),
   ],
-  controllers: [AppController],
+  controllers: [AppController,InventoryController],
   providers: [AppService, InventoryService],
 })
 export class AppModule {}
