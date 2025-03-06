@@ -2,14 +2,14 @@ import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Inventory } from 'src/entities/inventory.entity';
-import Redis from 'ioredis'; // Correct way to import Redis
+import Redis from 'ioredis';
 import { StockMovement } from 'src/entities/stock-movement.entity';
 import { DataSource } from 'typeorm';
 import { RecordStockMovementDto } from 'src/dto/record-stock-movement.dto';
 import { ClientProxy } from '@nestjs/microservices';
 @Injectable()
 export class InventoryService implements OnModuleInit {
-  private redisClient: Redis; // Type the redisClient properly
+  private redisClient: Redis; 
 
   constructor(
     @Inject('REDIS_SERVICE') private readonly productClient: ClientProxy,
@@ -37,8 +37,6 @@ export class InventoryService implements OnModuleInit {
 
   async onModuleInit() {
     console.log('📡 Subscribing to Redis events...');
-
-    // Subscribe to product.created channel
     this.redisClient.subscribe('product.created', (err, count) => {
       if (err) {
         console.error('❌ Redis subscription failed:', err);
@@ -47,7 +45,6 @@ export class InventoryService implements OnModuleInit {
       }
     });
 
-    // Log when message is received on the subscribed channel
     this.redisClient.on('message', async (channel, message) => {
       if (channel === 'product.created') {
         console.log(`📬 Received message on channel ${channel}: ${message}`);
@@ -63,9 +60,7 @@ export class InventoryService implements OnModuleInit {
   }
   async initializeStockLevel(message: any) {
     try {
-      // Ensure you're accessing the 'data' field
-      //   const product = message.data;
-      const product = message.data?.data; // Adjust this to match the structure of the message
+      const product = message.data?.data;
 
       if (!product || !product.productId) {
         console.error('❌ Product ID is missing in the event message');
