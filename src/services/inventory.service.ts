@@ -7,12 +7,12 @@ import { StockMovement } from 'src/entities/stock-movement.entity';
 import { DataSource } from 'typeorm';
 import { RecordStockMovementDto } from 'src/dto/record-stock-movement.dto';
 import { ClientProxy } from '@nestjs/microservices';
-import { firstValueFrom } from 'rxjs';
 
+import { Logger } from '@nestjs/common';
 @Injectable()
 export class InventoryService implements OnModuleInit {
   private redisClient: Redis;
-
+  private readonly logger = new Logger(InventoryService.name);
   constructor(
     @Inject('REDIS_SERVICE') private readonly productClient: ClientProxy,
     @InjectRepository(StockMovement)
@@ -29,16 +29,16 @@ export class InventoryService implements OnModuleInit {
     });
 
     this.redisClient.on('connect', () => {
-      console.log('✅ Connected to Redis');
+      console.log('Connected to Redis');
     });
 
     this.redisClient.on('error', (err) => {
-      console.error('❌ Redis connection error:', err);
+      console.error(' Redis connection error:', err);
     });
   }
 
   async onModuleInit() {
-    console.log('📡 Subscribing to Redis events...');
+    console.log('Subscribing to Redis events...');
     this.redisClient.subscribe('product.created', (err, count) => {
       if (err) {
         console.error(' Redis subscription failed:', err);
@@ -68,7 +68,7 @@ export class InventoryService implements OnModuleInit {
         console.error('Product ID is missing in the event message');
         return;
       }
-      console.log(`💾 Initializing stock for product ID: ${product.productId}`);
+      console.log(`Initializing stock for product ID: ${product.productId}`);
 
       const newInventory = this.inventoryRepository.create({
         productId: product.productId,
@@ -118,42 +118,136 @@ export class InventoryService implements OnModuleInit {
         quantity,
         reason,
       });
-
       return await manager.save(stockMovement);
     });
   }
 
   async inventorySummary(filter?: string, page = 1, limit = 10) {
     const inventory = await this.inventoryRepository.find();
-    const inventoryData = inventory.map((product) => ({
-      productId: product.productId,
-      quantityAvailable: product.quantityAvailable,
-    }));
-
     const productIds = inventory.map((product) => product.productId);
+
+    // Fetch stock movements (IN & OUT) grouped by productId
+    const stockMovements = await this.stockMovementRepository
+      .createQueryBuilder('stock_movement')
+      .select('productId')
+      .addSelect(`SUM(CASE WHEN type = 'IN' THEN quantity ELSE 0 END)`, 'inQty')
+      .addSelect(
+        `SUM(CASE WHEN type = 'OUT' THEN quantity ELSE 0 END)`,
+        'outQty',
+      )
+      .where('productId IN (:...productIds)', { productIds })
+      .groupBy('productId')
+      .getRawMany();
+    const stockMovementMap = new Map<
+      string,
+      { inQty: number; outQty: number }
+    >();
+    stockMovements.forEach((movement) => {
+      stockMovementMap.set(movement.productId, {
+        inQty: parseInt(movement.inQty, 10) || 0,
+        outQty: parseInt(movement.outQty, 10) || 0,
+      });
+    });
+
     const productDetails = await this.productClient
-      .send('get_produts_details', { productIds: productIds })
+      .send('get_produts_details', { productIds })
       .toPromise();
+
     const filteredProducts = productDetails.filter((product) =>
       filter
         ? product.productName.toLowerCase().includes(filter.toLowerCase())
         : true,
     );
-    const offset = (page - 1) * limit;
-    const paginatedProducts = filteredProducts.slice(offset, offset + limit);
-    return paginatedProducts.map((product) => {
-      const inventoryItem = inventoryData.find(
-        (inv) => inv.productId === product.productId,
+
+    type CategoryGroup = {
+      category: string;
+      subTotal: number;
+      totalInQty: number;
+      totalOutQty: number;
+      products: {
+        productName: string;
+        unit: string;
+        price: number;
+        specification: string;
+        quantityAvailable: number;
+        inQty: number;
+        outQty: number;
+      }[];
+    };
+
+    const categoryGroups: Record<string, CategoryGroup> =
+      filteredProducts.reduce(
+        (acc, product) => {
+          const inventoryItem = inventory.find(
+            (inv) => inv.productId === product.productId,
+          );
+          const stockMovement = stockMovementMap.get(product.productId) || {
+            inQty: 0,
+            outQty: 0,
+          };
+
+          const category = product.category
+            ? product.category.category
+            : 'Uncategorized';
+          const quantityAvailable = inventoryItem
+            ? inventoryItem.quantityAvailable
+            : 0;
+
+          if (!acc[category]) {
+            acc[category] = {
+              category,
+              subTotal: 0,
+              totalInQty: 0,
+              totalOutQty: 0,
+              products: [],
+            };
+          }
+
+          acc[category].subTotal += quantityAvailable;
+          acc[category].totalInQty += stockMovement.inQty;
+          acc[category].totalOutQty += stockMovement.outQty;
+
+          acc[category].products.push({
+            productName: product.productName,
+            unit: product.baseUnit,
+            price: product.selling_price,
+            specification: product.specification,
+            quantityAvailable,
+            inQty: stockMovement.inQty,
+            outQty: stockMovement.outQty,
+          });
+
+          return acc;
+        },
+        {} as Record<string, CategoryGroup>,
       );
-      return {
-        productName: product.productName,
-        unit: product.baseUnit,
-        category: product.category.category, 
-        price: product.selling_price,
-        specification: product.specification,
-        quantityAvailable: inventoryItem ? inventoryItem.quantityAvailable : 0,
-      };
-    });
+
+    // Calculate overall totals
+    const overallTotalQuantity = Object.values(categoryGroups).reduce(
+      (sum, category) => sum + category.subTotal,
+      0,
+    );
+
+    const overallTotalInQty = Object.values(categoryGroups).reduce(
+      (sum, category) => sum + category.totalInQty,
+      0,
+    );
+
+    const overallTotalOutQty = Object.values(categoryGroups).reduce(
+      (sum, category) => sum + category.totalOutQty,
+      0,
+    );
+
+    const groupedData = Object.values(categoryGroups);
+    const offset = (page - 1) * limit;
+    const paginatedCategories = groupedData.slice(offset, offset + limit);
+
+    return {
+      overallTotalQuantity,
+      overallTotalInQty,
+      overallTotalOutQty,
+      categories: paginatedCategories,
+    };
   }
 }
 
