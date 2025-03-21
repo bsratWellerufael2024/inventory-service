@@ -7,8 +7,10 @@ import { StockMovement } from 'src/entities/stock-movement.entity';
 import { DataSource } from 'typeorm';
 import { RecordStockMovementDto } from 'src/dto/record-stock-movement.dto';
 import { ClientProxy } from '@nestjs/microservices';
-
 import { Logger } from '@nestjs/common';
+import * as moment from 'moment';
+import { createObjectCsvStringifier } from 'csv-writer';
+import * as PDFDocument from 'pdfkit';
 @Injectable()
 export class InventoryService implements OnModuleInit {
   private redisClient: Redis;
@@ -36,7 +38,6 @@ export class InventoryService implements OnModuleInit {
       console.error(' Redis connection error:', err);
     });
   }
-
   async onModuleInit() {
     console.log('Subscribing to Redis events...');
     this.redisClient.subscribe('product.created', (err, count) => {
@@ -60,28 +61,61 @@ export class InventoryService implements OnModuleInit {
       }
     });
   }
+
   async initializeStockLevel(message: any) {
     try {
-      const product = message.data?.data;
+      // Extract data from message (handle both 'product.created' and 'product.updated' events)
+      const { productId, openingQty } = message?.data || message;
 
-      if (!product || !product.productId) {
-        console.error('Product ID is missing in the event message');
+      console.log(
+        '[InventoryService] initializeStockLevel() called with:',
+        message,
+      );
+
+      if (!productId) {
+        console.error('[InventoryService] Product ID is missing');
         return;
       }
-      console.log(`Initializing stock for product ID: ${product.productId}`);
 
-      const newInventory = this.inventoryRepository.create({
-        productId: product.productId,
-        quantityAvailable: product.openingQty || 0,
-        lowStockThreshold: 5,
-        lastRestocked: new Date(),
+      if (openingQty === undefined) {
+        console.warn(
+          `[InventoryService] No openingQty provided for product ID ${productId}`,
+        );
+      }
+
+      const existingInventory = await this.inventoryRepository.findOne({
+        where: { productId },
       });
 
-      await this.inventoryRepository.save(newInventory);
+      if (existingInventory) {
+        console.log(
+          `[InventoryService] Found existing inventory for product ID ${productId}`,
+        );
+        if (openingQty !== undefined) {
+          existingInventory.quantityAvailable = openingQty;
+          await this.inventoryRepository.save(existingInventory);
+          console.log(
+            `[InventoryService] Updated stock level for product ID ${productId}`,
+          );
+        }
+      } else {
+        console.log(
+          `[InventoryService] No existing inventory. Creating new inventory for product ID ${productId}`,
+        );
+        const newInventory = this.inventoryRepository.create({
+          productId,
+          quantityAvailable: openingQty || 0,
+          lowStockThreshold: 5,
+          lastRestocked: new Date(),
+        });
 
-      console.log(`Stock initialized for product ID: ${product.productId}`);
+        await this.inventoryRepository.save(newInventory);
+        console.log(
+          `[InventoryService] Stock initialized for product ID ${productId}`,
+        );
+      }
     } catch (error) {
-      console.error('Error initializing stock:', error);
+      console.error('[InventoryService] Error initializing stock:', error);
     }
   }
 
@@ -89,7 +123,11 @@ export class InventoryService implements OnModuleInit {
     dto: RecordStockMovementDto,
   ): Promise<StockMovement> {
     return this.dataSource.transaction(async (manager) => {
-      const { productId, type, quantity, reason } = dto;
+      const { productId, type, quantity, reason, activatedBy } = dto;
+
+      if (!activatedBy) {
+        throw new Error('ActivatedBy (username) is required');
+      }
 
       let inventory = await manager.findOne(Inventory, {
         where: { productId },
@@ -100,6 +138,7 @@ export class InventoryService implements OnModuleInit {
           `Inventory record not found for productId: ${productId}`,
         );
       }
+
       let newQuantity = inventory.quantityAvailable;
       if (type === 'IN') {
         newQuantity += quantity;
@@ -112,21 +151,138 @@ export class InventoryService implements OnModuleInit {
 
       inventory.quantityAvailable = newQuantity;
       await manager.save(inventory);
+
       const stockMovement = this.stockMovementRepository.create({
         productId,
         type,
         quantity,
         reason,
+        activatedBy,
       });
+
       return await manager.save(stockMovement);
+    });
+  }
+
+  async getStockMovements(filters: {
+    productId?: number;
+    activatedBy?: string;
+    startDate?: string;
+    endDate?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const {
+      productId,
+      activatedBy,
+      startDate,
+      endDate,
+      page = 1,
+      limit = 10,
+    } = filters;
+
+    const query =
+      this.stockMovementRepository.createQueryBuilder('stockMovement');
+
+    if (productId)
+      query.andWhere('stockMovement.productId = :productId', { productId });
+    if (activatedBy)
+      query.andWhere('stockMovement.activatedBy = :activatedBy', {
+        activatedBy,
+      });
+    if (startDate)
+      query.andWhere('stockMovement.createdAt >= :startDate', { startDate });
+    if (endDate)
+      query.andWhere('stockMovement.createdAt <= :endDate', { endDate });
+
+    query.orderBy('stockMovement.createdAt', 'DESC');
+
+    const [data, total] = await query
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+
+    const now = moment();
+    const formattedData = data.map((movement) => ({
+      ...movement,
+      timeAgo: moment(movement.createdAt).from(now),
+    }));
+
+    return { data: formattedData, total };
+  }
+
+  //generating the csv file
+  async generateCsv(activatedBy?: string): Promise<string> {
+    const whereCondition = activatedBy ? { activatedBy: activatedBy } : {}; // Ensure it's an object
+
+    const movements = await this.stockMovementRepository.find({
+      where: whereCondition, // Now TypeScript won't complain
+      order: { createdAt: 'DESC' },
+    });
+
+    const csvStringifier = createObjectCsvStringifier({
+      header: [
+        { id: 'id', title: 'ID' },
+        { id: 'productId', title: 'Product ID' },
+        { id: 'quantity', title: 'Quantity' },
+        { id: 'type', title: 'Type' },
+        { id: 'activatedBy', title: 'Activated By' },
+        { id: 'createdAt', title: 'Date' },
+      ],
+    });
+
+    const records = movements.map((movement) => ({
+      id: movement.id,
+      productId: movement.productId,
+      quantity: movement.quantity,
+      type: movement.type,
+      activatedBy: movement.activatedBy,
+      createdAt: movement.createdAt.toISOString(),
+    }));
+
+    return (
+      csvStringifier.getHeaderString() +
+      csvStringifier.stringifyRecords(records)
+    );
+  }
+
+  //generating the pdf file
+
+  async generatePdf(activatedBy?: string): Promise<Buffer> {
+    const whereCondition = activatedBy ? { activatedBy: activatedBy } : {}; // Ensure correct type
+
+    const movements = await this.stockMovementRepository.find({
+      where: whereCondition,
+      order: { createdAt: 'DESC' },
+    });
+
+    const doc = new PDFDocument();
+    const chunks: Buffer[] = [];
+
+    return new Promise((resolve, reject) => {
+      doc.on('data', (chunk) => chunks.push(chunk));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', (err) => reject(err));
+
+      doc.fontSize(16).text('Stock Movements Report', { align: 'center' });
+      doc.moveDown();
+
+      movements.forEach((movement) => {
+        doc.fontSize(12).text(`Product ID: ${movement.productId}`);
+        doc.text(`Quantity: ${movement.quantity}`);
+        doc.text(`Type: ${movement.type}`);
+        doc.text(`Activated By: ${movement.activatedBy}`);
+        doc.text(`Date: ${movement.createdAt.toISOString()}`);
+        doc.moveDown();
+      });
+
+      doc.end();
     });
   }
 
   async inventorySummary(filter?: string, page = 1, limit = 10) {
     const inventory = await this.inventoryRepository.find();
     const productIds = inventory.map((product) => product.productId);
-
-    // Fetch stock movements (IN & OUT) grouped by productId
     const stockMovements = await this.stockMovementRepository
       .createQueryBuilder('stock_movement')
       .select('productId')
@@ -222,7 +378,6 @@ export class InventoryService implements OnModuleInit {
         {} as Record<string, CategoryGroup>,
       );
 
-    // Calculate overall totals
     const overallTotalQuantity = Object.values(categoryGroups).reduce(
       (sum, category) => sum + category.subTotal,
       0,
@@ -237,11 +392,9 @@ export class InventoryService implements OnModuleInit {
       (sum, category) => sum + category.totalOutQty,
       0,
     );
-
     const groupedData = Object.values(categoryGroups);
     const offset = (page - 1) * limit;
     const paginatedCategories = groupedData.slice(offset, offset + limit);
-
     return {
       overallTotalQuantity,
       overallTotalInQty,
