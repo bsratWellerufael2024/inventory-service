@@ -24,7 +24,7 @@ export class InventoryController {
   recordStockMovement(dto: any) {
     return this.inventoryService.recordStockMovement(dto);
   }
-  
+
   @MessagePattern('get_stock_movements')
   async getStockMovements(
     @Payload()
@@ -47,7 +47,23 @@ export class InventoryController {
 
   @MessagePattern('export_pdf')
   async handlePdfExport(@Payload() data: { activatedBy?: string }) {
-    return await this.inventoryService.generatePdf(data.activatedBy); 
+    return await this.inventoryService.generatePdf(data.activatedBy);
+  }
+
+  @MessagePattern('export_inventory_summary_pdf')
+  async handleSummaryPdfRequest() {
+    const summary = await this.inventoryService.inventorySummary(); // fetch grouped summary
+    const pdfBuffer =
+      await this.inventoryService.generateInventorySummaryPdf(summary); // generate PDF
+    return pdfBuffer; // this buffer will be received by the API Gateway
+  }
+
+  @MessagePattern('export_inventory_summary_csv')
+  async handleSummaryCsvRequest() {
+    const summary = await this.inventoryService.inventorySummary();
+    const csvBuffer =
+      await this.inventoryService.generateInventorySummaryCSV(summary);
+    return csvBuffer; // ✅ No need to wrap it in `{ data: ... }`
   }
 
   @MessagePattern('inventory.getSummary')
