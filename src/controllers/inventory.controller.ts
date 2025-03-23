@@ -45,9 +45,6 @@ export class InventoryController {
     return this.inventoryService.generateCsv(data.activatedBy);
   }
 
-  // message for export_stock_movements_pdf
-  // inventory.service.ts
-  // inventory.service.ts
   @EventPattern('generate-stock-movement-pdf')
   async handleGenerateStockMovementPdf(
     @Payload() payload: { activatedBy?: string },

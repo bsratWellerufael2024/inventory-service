@@ -205,30 +205,58 @@ export class InventoryService implements OnModuleInit {
       .take(limit)
       .getManyAndCount();
 
+    const uniqueProductIds = [...new Set(data.map((m) => m.productId))];
+
+    let productMap: Record<string, string> = {};
+    try {
+      productMap = await lastValueFrom(
+        this.productClient.send('get_products_by_ids', uniqueProductIds),
+      );
+    } catch (err) {
+      console.error('Error fetching product names:', err.message);
+    }
+
     const now = moment();
     const formattedData = data.map((movement) => ({
       ...movement,
+      productName: productMap[movement.productId] || 'Unknown Product',
       timeAgo: moment(movement.createdAt).from(now),
     }));
 
-    return { data: formattedData, total };
+    return {
+      success: true,
+      message: 'Stock movements fetched successfully',
+      total,
+      data: formattedData,
+      page,
+      limit,
+    };
   }
 
-  //generating the csv file
   async generateCsv(activatedBy?: string): Promise<string> {
-    const whereCondition = activatedBy ? { activatedBy: activatedBy } : {};
+    const whereCondition = activatedBy ? { activatedBy } : {};
 
     const movements = await this.stockMovementRepository.find({
       where: whereCondition,
       order: { createdAt: 'DESC' },
     });
 
+    // ✅ Step 1: Collect unique product IDs
+    const uniqueProductIds = [...new Set(movements.map((m) => m.productId))];
+
+    // ✅ Step 2: Fetch product names from Product Service
+    const productMap: Record<string, string> = await lastValueFrom(
+      this.productClient.send('get_products_by_ids', uniqueProductIds),
+    );
+
+    // ✅ Step 3: CSV Header and mapping
     const csvStringifier = createObjectCsvStringifier({
       header: [
         { id: 'id', title: 'ID' },
-        { id: 'productId', title: 'Product ID' },
+        { id: 'productName', title: 'Product Name' },
         { id: 'quantity', title: 'Quantity' },
         { id: 'type', title: 'Type' },
+        { id: 'reason', title: 'Reason' },
         { id: 'activatedBy', title: 'Activated By' },
         { id: 'createdAt', title: 'Date' },
       ],
@@ -236,11 +264,12 @@ export class InventoryService implements OnModuleInit {
 
     const records = movements.map((movement) => ({
       id: movement.id,
-      productId: movement.productId,
+      productName: productMap[movement.productId] || 'Unknown Product',
       quantity: movement.quantity,
       type: movement.type,
-      activatedBy: movement.activatedBy,
-      createdAt: movement.createdAt.toISOString(),
+      reason: movement.reason || 'N/A',
+      activatedBy: movement.activatedBy || 'Unknown',
+      createdAt: movement.createdAt?.toISOString().split('T')[0] ?? 'N/A',
     }));
 
     return (
@@ -410,7 +439,6 @@ export class InventoryService implements OnModuleInit {
     });
   }
 
-  
   async inventorySummary(filter?: string, page = 1, limit = 10) {
     const inventory = await this.inventoryRepository.find();
     const productIds = inventory.map((product) => product.productId);
