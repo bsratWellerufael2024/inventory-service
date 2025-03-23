@@ -13,11 +13,13 @@ import { createObjectCsvStringifier } from 'csv-writer';
 import * as PDFDocument from 'pdfkit';
 import * as fs from 'fs';
 import * as path from 'path';
+import { lastValueFrom } from 'rxjs';
 
 @Injectable()
 export class InventoryService implements OnModuleInit {
   private redisClient: Redis;
   private readonly logger = new Logger(InventoryService.name);
+
   constructor(
     @Inject('REDIS_SERVICE') private readonly productClient: ClientProxy,
     @InjectRepository(StockMovement)
@@ -249,138 +251,166 @@ export class InventoryService implements OnModuleInit {
 
   //generating the pdf file
 
- 
-
-
-async generatePdf(activatedBy?: string): Promise<Buffer> {
-  const whereCondition = activatedBy ? { activatedBy } : {};
-  console.log('Where Condition:', whereCondition);
-
-  const movements = await this.stockMovementRepository.find({
-    where: whereCondition,
-    order: { createdAt: 'DESC' },
-  });
-
-  console.log('Fetched movements:', movements);
-
-  const doc = new PDFDocument({ margin: 40, size: 'A4' });
-  const chunks: Buffer[] = [];
-
-  return new Promise((resolve, reject) => {
-    doc.on('data', (chunk) => chunks.push(chunk));
-    doc.on('end', () => {
-      console.log('PDF generation ended. Buffer size:', chunks.length);
-      resolve(Buffer.concat(chunks));
-    });
-    doc.on('error', (err) => {
-      console.error('Error generating PDF:', err);
-      reject(err);
+  async generatePdf(activatedBy?: string): Promise<Buffer> {
+    const whereCondition = activatedBy ? { activatedBy } : {};
+    const movements = await this.stockMovementRepository.find({
+      where: whereCondition,
+      order: { createdAt: 'DESC' },
     });
 
-    // ===== Optional Logo =====
-    const logoPath = path.join(__dirname, '../assets/logo.png'); // Change this path to your actual logo
-    if (fs.existsSync(logoPath)) {
-      doc.image(logoPath, doc.page.width - 120, 20, { width: 80 });
-    }
+    const uniqueProductIds = [...new Set(movements.map((m) => m.productId))];
+    const productMap: Record<string, string> = await lastValueFrom(
+      this.productClient.send('get_products_by_ids', uniqueProductIds),
+    );
 
-    // ===== Header =====
-    doc.fontSize(18).font('Helvetica-Bold').text(' Stock Movements Report', {
-      align: 'center',
-    });
-    doc.moveDown(0.5);
+    const doc = new PDFDocument({ margin: 40, size: 'A4' });
+    const chunks: Buffer[] = [];
 
-    doc.fontSize(10).font('Helvetica').fillColor('gray')
-      .text(`Generated at: ${new Date().toLocaleString()}`, { align: 'left' });
-    if (activatedBy) {
-      doc.text(`Activated By: ${activatedBy}`);
-    }
+    return new Promise((resolve, reject) => {
+      doc.on('data', (chunk) => chunks.push(chunk));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', (err) => reject(err));
 
-    doc.moveDown(1);
-
-    // ===== Table Config =====
-    const tableTop = doc.y;
-    const rowHeight = 20;
-    const colWidths = [80, 70, 60, 100, 130];
-    const headers = ['Product ID', 'Quantity', 'Type', 'Activated By', 'Date'];
-    const x = 50;
-
-    // ===== Draw Header Background =====
-    doc.rect(x, tableTop, colWidths.reduce((a, b) => a + b), rowHeight)
-      .fill('#f0f0f0')
-      .stroke();
-
-    // ===== Write Headers =====
-    doc.fillColor('black').fontSize(11).font('Helvetica-Bold');
-    let currentX = x;
-    headers.forEach((header, i) => {
-      doc.text(header, currentX + 5, tableTop + 5, { width: colWidths[i], align: 'left' });
-      currentX += colWidths[i];
-    });
-
-    // ===== Write Rows =====
-    let y = tableTop + rowHeight;
-    doc.font('Helvetica').fontSize(10);
-
-    let totalIn = 0;
-    let totalOut = 0;
-
-    movements.forEach((movement, index) => {
-      const isEven = index % 2 === 0;
-      const movementType = movement.type || 'N/A';
-      const quantity = movement.quantity || 0;
-
-      // Alternate row background
-      if (isEven) {
-        doc.rect(x, y, colWidths.reduce((a, b) => a + b), rowHeight)
-          .fill('#fafafa')
-          .stroke();
+      // Logo (optional)
+      const logoPath = path.join(__dirname, '../assets/logo.png');
+      if (fs.existsSync(logoPath)) {
+        doc.image(logoPath, doc.page.width - 120, 20, { width: 80 });
       }
 
-      if (movementType === 'IN') totalIn += quantity;
-      if (movementType === 'OUT') totalOut += quantity;
+      // Header
+      doc
+        .fontSize(18)
+        .font('Helvetica-Bold')
+        .text('Stock Movements Report', { align: 'center' })
+        .moveDown(0.5);
 
-      const values = [
-        movement.productId ?? 'N/A',
-        quantity,
-        movementType,
-        movement.activatedBy ?? 'Unknown',
-        movement.createdAt?.toISOString().split('T')[0] ?? 'N/A',
+      doc
+        .fontSize(10)
+        .font('Helvetica')
+        .fillColor('gray')
+        .text(`Generated at: ${new Date().toLocaleString()}`, {
+          align: 'left',
+        });
+
+      if (activatedBy) {
+        doc.text(`Activated By: ${activatedBy}`);
+      }
+
+      doc.moveDown(1);
+
+      // Table Configuration
+      const tableTop = doc.y;
+      const rowHeight = 20;
+      const colWidths = [100, 50, 60, 90, 80, 80]; // Adjust widths
+      const headers = [
+        'Product Name',
+        'Qty',
+        'Type',
+        'Activated By',
+        'Date',
+        'Reason',
       ];
+      const x = 50;
 
+      // Table Header
+      doc
+        .rect(
+          x,
+          tableTop,
+          colWidths.reduce((a, b) => a + b),
+          rowHeight,
+        )
+        .fill('#f0f0f0')
+        .stroke();
+
+      doc.fillColor('black').fontSize(11).font('Helvetica-Bold');
       let currentX = x;
-      values.forEach((val, i) => {
-        // Color based on Type
-        if (headers[i] === 'Type') {
-          if (val === 'IN') doc.fillColor('green');
-          else if (val === 'OUT') doc.fillColor('red');
-          else doc.fillColor('black');
-        } else {
-          doc.fillColor('black');
-        }
-
-        doc.text(String(val), currentX + 5, y + 5, {
+      headers.forEach((header, i) => {
+        doc.text(header, currentX + 5, tableTop + 5, {
           width: colWidths[i],
           align: 'left',
         });
         currentX += colWidths[i];
       });
 
-      y += rowHeight;
+      // Table Rows
+      let y = tableTop + rowHeight;
+      doc.font('Helvetica').fontSize(10);
+
+      let totalIn = 0;
+      let totalOut = 0;
+
+      movements.forEach((movement, index) => {
+        const isEven = index % 2 === 0;
+        const movementType = movement.type || 'N/A';
+        const quantity = movement.quantity || 0;
+        const reason = movement.reason || 'N/A';
+
+        if (isEven) {
+          doc
+            .rect(
+              x,
+              y,
+              colWidths.reduce((a, b) => a + b),
+              rowHeight,
+            )
+            .fill('#fafafa')
+            .stroke();
+        }
+
+        if (movementType === 'IN') totalIn += quantity;
+        if (movementType === 'OUT') totalOut += quantity;
+
+        const productName = productMap[movement.productId] || 'Unknown Product';
+
+        const values = [
+          productName,
+          quantity,
+          movementType,
+          movement.activatedBy ?? 'Unknown',
+          movement.createdAt?.toISOString().split('T')[0] ?? 'N/A',
+          reason,
+        ];
+
+        let currentX = x;
+        values.forEach((val, i) => {
+          doc.fillColor(
+            headers[i] === 'Type'
+              ? val === 'IN'
+                ? 'green'
+                : val === 'OUT'
+                  ? 'red'
+                  : 'black'
+              : 'black',
+          );
+
+          doc.text(String(val), currentX + 5, y + 5, {
+            width: colWidths[i],
+            align: 'left',
+          });
+          currentX += colWidths[i];
+        });
+
+        y += rowHeight;
+      });
+
+      // Summary
+      doc.moveDown(1);
+      doc
+        .font('Helvetica-Bold')
+        .fontSize(12)
+        .text('Summary', { underline: true });
+      doc.moveDown(0.5);
+      doc.font('Helvetica').fontSize(10);
+      doc.fillColor('green').text(`Total IN Quantity: ${totalIn}`);
+      doc.fillColor('red').text(`Total OUT Quantity: ${totalOut}`);
+      doc.fillColor('black');
+
+      doc.end();
     });
+  }
 
-    // ===== Summary Section =====
-    doc.moveDown(1);
-    doc.font('Helvetica-Bold').fontSize(12).text('Summary', { underline: true });
-    doc.moveDown(0.5);
-    doc.font('Helvetica').fontSize(10);
-    doc.fillColor('green').text(`Total IN Quantity: ${totalIn}`);
-    doc.fillColor('red').text(`Total OUT Quantity: ${totalOut}`);
-    doc.fillColor('black');
-
-    doc.end();
-  });
-}
-
+  
   async inventorySummary(filter?: string, page = 1, limit = 10) {
     const inventory = await this.inventoryRepository.find();
     const productIds = inventory.map((product) => product.productId);
@@ -504,210 +534,206 @@ async generatePdf(activatedBy?: string): Promise<Buffer> {
     };
   }
 
-  
+  //pdf for inventory summary
+  async generateInventorySummaryPdf(summary): Promise<Buffer> {
+    const doc = new PDFDocument({ margin: 40, size: 'A4' });
+    const buffers: Buffer[] = [];
 
-//pdf for inventory summary
-async generateInventorySummaryPdf(summary): Promise<Buffer> {
-  const doc = new PDFDocument({ margin: 40, size: 'A4' });
-  const buffers: Buffer[] = [];
+    doc.on('data', (chunk) => buffers.push(chunk));
+    doc.on('end', () => {});
 
-  doc.on('data', (chunk) => buffers.push(chunk));
-  doc.on('end', () => {});
+    const titleFontSize = 18;
+    const headerFontSize = 10;
+    const rowFontSize = 9;
+    const rowHeight = 20;
+    const tableLeft = 40;
+    const tableWidth = 520;
 
-  const titleFontSize = 18;
-  const headerFontSize = 10;
-  const rowFontSize = 9;
-  const rowHeight = 20;
-  const tableLeft = 40;
-  const tableWidth = 520;
+    const columns = [
+      { label: 'Product', width: 90, align: 'left' },
+      { label: 'Spec', width: 80, align: 'left' },
+      { label: 'Unit', width: 50, align: 'left' },
+      { label: 'InQty', width: 50, align: 'right' },
+      { label: 'OutQty', width: 50, align: 'right' },
+      { label: 'Available', width: 60, align: 'right' },
+      { label: 'Price', width: 60, align: 'right' },
+    ];
 
-  const columns = [
-    { label: 'Product', width: 90, align: 'left' },
-    { label: 'Spec', width: 80, align: 'left' },
-    { label: 'Unit', width: 50, align: 'left' },
-    { label: 'InQty', width: 50, align: 'right' },
-    { label: 'OutQty', width: 50, align: 'right' },
-    { label: 'Available', width: 60, align: 'right' },
-    { label: 'Price', width: 60, align: 'right' },
-  ];
-
-  // ===== Optional Logo =====
-  const logoPath = path.join(__dirname, '../assets/logo.png');
-  if (fs.existsSync(logoPath)) {
-    doc.image(logoPath, doc.page.width - 120, 20, { width: 80 });
-  }
-
-  // ===== Title =====
-  doc
-    .fontSize(titleFontSize)
-    .font('Helvetica-Bold')
-    .text('Inventory Summary Report', { align: 'center' });
-  doc.moveDown(0.5);
-
-  doc
-    .fontSize(10)
-    .font('Helvetica')
-    .fillColor('gray')
-    .text(`Generated at: ${new Date().toLocaleString()}`, { align: 'left' });
-
-  doc.moveDown(1);
-  let y = doc.y;
-
-  for (const category of summary.categories) {
-    // ===== Category Header =====
-    doc.rect(tableLeft, y, tableWidth, rowHeight)
-      .fill('#ddeeff');
-    doc.fillColor('black')
-      .fontSize(13)
-      .font('Helvetica-Bold')
-      .text(`Category: ${category.category}`, tableLeft + 6, y + 5);
-    y += rowHeight;
-
-    // ===== Column Headers =====
-    doc.rect(tableLeft, y, tableWidth, rowHeight).fill('#f0f0f0');
-    doc.fillColor('#000').fontSize(headerFontSize).font('Helvetica-Bold');
-    let x = tableLeft;
-
-    for (const col of columns) {
-      doc.text(col.label, x + 4, y + 6, {
-        width: col.width,
-        align: col.align,
-      });
-      x += col.width;
+    // ===== Optional Logo =====
+    const logoPath = path.join(__dirname, '../assets/logo.png');
+    if (fs.existsSync(logoPath)) {
+      doc.image(logoPath, doc.page.width - 120, 20, { width: 80 });
     }
-    y += rowHeight;
 
-    doc.fontSize(rowFontSize).font('Helvetica');
-    let isAlternate = false;
+    // ===== Title =====
+    doc
+      .fontSize(titleFontSize)
+      .font('Helvetica-Bold')
+      .text('Inventory Summary Report', { align: 'center' });
+    doc.moveDown(0.5);
 
-    let subtotalInQty = 0;
-    let subtotalOutQty = 0;
-    let subtotalAvailable = 0;
+    doc
+      .fontSize(10)
+      .font('Helvetica')
+      .fillColor('gray')
+      .text(`Generated at: ${new Date().toLocaleString()}`, { align: 'left' });
 
-    for (const product of category.products) {
+    doc.moveDown(1);
+    let y = doc.y;
+
+    for (const category of summary.categories) {
+      // ===== Category Header =====
+      doc.rect(tableLeft, y, tableWidth, rowHeight).fill('#ddeeff');
+      doc
+        .fillColor('black')
+        .fontSize(13)
+        .font('Helvetica-Bold')
+        .text(`Category: ${category.category}`, tableLeft + 6, y + 5);
+      y += rowHeight;
+
+      // ===== Column Headers =====
+      doc.rect(tableLeft, y, tableWidth, rowHeight).fill('#f0f0f0');
+      doc.fillColor('#000').fontSize(headerFontSize).font('Helvetica-Bold');
+      let x = tableLeft;
+
+      for (const col of columns) {
+        doc.text(col.label, x + 4, y + 6, {
+          width: col.width,
+          align: col.align,
+        });
+        x += col.width;
+      }
+      y += rowHeight;
+
+      doc.fontSize(rowFontSize).font('Helvetica');
+      let isAlternate = false;
+
+      let subtotalInQty = 0;
+      let subtotalOutQty = 0;
+      let subtotalAvailable = 0;
+
+      for (const product of category.products) {
+        if (y + rowHeight > doc.page.height - 80) {
+          doc.addPage();
+          y = 40;
+        }
+
+        // Row shading
+        if (isAlternate) {
+          doc.rect(tableLeft, y, tableWidth, rowHeight).fill('#fafafa');
+        }
+
+        doc.fillColor('#000');
+        x = tableLeft;
+
+        const rowData = [
+          product.productName,
+          product.specification || '',
+          product.unit,
+          product.inQty.toString(),
+          product.outQty.toString(),
+          product.quantityAvailable.toString(),
+          product.price.toFixed(2),
+        ];
+
+        for (let i = 0; i < columns.length; i++) {
+          doc.text(rowData[i], x + 4, y + 6, {
+            width: columns[i].width,
+            align: columns[i].align,
+          });
+          x += columns[i].width;
+        }
+
+        subtotalInQty += product.inQty;
+        subtotalOutQty += product.outQty;
+        subtotalAvailable += product.quantityAvailable;
+
+        y += rowHeight;
+        isAlternate = !isAlternate;
+      }
+
+      // ===== Subtotal Row =====
       if (y + rowHeight > doc.page.height - 80) {
         doc.addPage();
         y = 40;
       }
 
-      // Row shading
-      if (isAlternate) {
-        doc.rect(tableLeft, y, tableWidth, rowHeight).fill('#fafafa');
-      }
+      doc.rect(tableLeft, y, tableWidth, rowHeight).fill('#e0e0e0');
+      doc.fillColor('#000').font('Helvetica-Bold');
 
-      doc.fillColor('#000');
       x = tableLeft;
-
-      const rowData = [
-        product.productName,
-        product.specification || '',
-        product.unit,
-        product.inQty.toString(),
-        product.outQty.toString(),
-        product.quantityAvailable.toString(),
-        product.price.toFixed(2),
+      const subtotalData = [
+        'Subtotal',
+        '',
+        '',
+        subtotalInQty.toString(),
+        subtotalOutQty.toString(),
+        subtotalAvailable.toString(),
+        '',
       ];
 
       for (let i = 0; i < columns.length; i++) {
-        doc.text(rowData[i], x + 4, y + 6, {
+        doc.text(subtotalData[i], x + 4, y + 6, {
           width: columns[i].width,
           align: columns[i].align,
         });
         x += columns[i].width;
       }
 
-      subtotalInQty += product.inQty;
-      subtotalOutQty += product.outQty;
-      subtotalAvailable += product.quantityAvailable;
-
       y += rowHeight;
-      isAlternate = !isAlternate;
+      doc.moveDown();
+      y = doc.y;
     }
 
-    // ===== Subtotal Row =====
-    if (y + rowHeight > doc.page.height - 80) {
-      doc.addPage();
-      y = 40;
-    }
+    // ===== Final Summary =====
+    if (y + 80 > doc.page.height) doc.addPage();
+    doc.moveDown(1);
 
-    doc.rect(tableLeft, y, tableWidth, rowHeight).fill('#e0e0e0');
-    doc.fillColor('#000').font('Helvetica-Bold');
-
-    x = tableLeft;
-    const subtotalData = [
-      'Subtotal',
-      '',
-      '',
-      subtotalInQty.toString(),
-      subtotalOutQty.toString(),
-      subtotalAvailable.toString(),
-      '',
-    ];
-
-    for (let i = 0; i < columns.length; i++) {
-      doc.text(subtotalData[i], x + 4, y + 6, {
-        width: columns[i].width,
-        align: columns[i].align,
-      });
-      x += columns[i].width;
-    }
-
-    y += rowHeight;
-    doc.moveDown();
-    y = doc.y;
-  }
-
-  // ===== Final Summary =====
-  if (y + 80 > doc.page.height) doc.addPage();
-  doc.moveDown(1);
-
-  doc
-    .fontSize(12)
-    .fillColor('#000')
-    .font('Helvetica-Bold')
-    .text('Overall Summary');
-
-  doc.moveDown(0.5);
-
-  doc.rect(tableLeft, doc.y, 260, 60).fill('#f7f7f7');
-  doc.fillColor('#000').font('Helvetica').fontSize(10);
-
-const summaryBoxY = doc.y;
-doc.text(
-  `Total InQty: ${summary.overallTotalInQty}`,
-  tableLeft + 8,
-  summaryBoxY + 10,
-);
-doc.text(
-  ` Total OutQty: ${summary.overallTotalOutQty}`,
-  tableLeft + 8,
-  summaryBoxY + 26,
-);
-doc.text(
-  `Total Available: ${summary.overallTotalQuantity}`,
-  tableLeft + 8,
-  summaryBoxY + 42,
-);
-
-
-  // ===== Page Numbers =====
-  const pageCount = doc.bufferedPageRange().count;
-  for (let i = 0; i < pageCount; i++) {
-    doc.switchToPage(i);
     doc
-      .fontSize(8)
-      .fillColor('gray')
-      .text(`Page ${i + 1} of ${pageCount}`, 40, doc.page.height - 30, {
-        align: 'center',
-        width: doc.page.width - 80,
-      });
+      .fontSize(12)
+      .fillColor('#000')
+      .font('Helvetica-Bold')
+      .text('Overall Summary');
+
+    doc.moveDown(0.5);
+
+    doc.rect(tableLeft, doc.y, 260, 60).fill('#f7f7f7');
+    doc.fillColor('#000').font('Helvetica').fontSize(10);
+
+    const summaryBoxY = doc.y;
+    doc.text(
+      `Total InQty: ${summary.overallTotalInQty}`,
+      tableLeft + 8,
+      summaryBoxY + 10,
+    );
+    doc.text(
+      ` Total OutQty: ${summary.overallTotalOutQty}`,
+      tableLeft + 8,
+      summaryBoxY + 26,
+    );
+    doc.text(
+      `Total Available: ${summary.overallTotalQuantity}`,
+      tableLeft + 8,
+      summaryBoxY + 42,
+    );
+
+    // ===== Page Numbers =====
+    const pageCount = doc.bufferedPageRange().count;
+    for (let i = 0; i < pageCount; i++) {
+      doc.switchToPage(i);
+      doc
+        .fontSize(8)
+        .fillColor('gray')
+        .text(`Page ${i + 1} of ${pageCount}`, 40, doc.page.height - 30, {
+          align: 'center',
+          width: doc.page.width - 80,
+        });
+    }
+
+    doc.end();
+    await new Promise((resolve) => doc.on('end', resolve));
+    return Buffer.concat(buffers);
   }
-
-  doc.end();
-  await new Promise((resolve) => doc.on('end', resolve));
-  return Buffer.concat(buffers);
-}
-
 
   async generateInventorySummaryCSV(summary): Promise<Buffer> {
     let csvContent = '';
