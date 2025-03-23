@@ -45,9 +45,18 @@ export class InventoryController {
     return this.inventoryService.generateCsv(data.activatedBy);
   }
 
-  @MessagePattern('export_pdf')
-  async handlePdfExport(@Payload() data: { activatedBy?: string }) {
-    return await this.inventoryService.generatePdf(data.activatedBy);
+  // message for export_stock_movements_pdf
+  // inventory.service.ts
+  // inventory.service.ts
+  @EventPattern('generate-stock-movement-pdf')
+  async handleGenerateStockMovementPdf(
+    @Payload() payload: { activatedBy?: string },
+  ) {
+    const buffer = await this.inventoryService.generatePdf(payload.activatedBy);
+
+    return {
+      pdf: buffer.toString('base64'), // Encode buffer as base64 string
+    };
   }
 
   @MessagePattern('export_inventory_summary_pdf')
