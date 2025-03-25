@@ -14,6 +14,8 @@ import * as PDFDocument from 'pdfkit';
 import * as fs from 'fs';
 import * as path from 'path';
 import { lastValueFrom } from 'rxjs';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from '@nestjs/cache-manager';
 
 @Injectable()
 export class InventoryService implements OnModuleInit {
@@ -21,6 +23,7 @@ export class InventoryService implements OnModuleInit {
   private readonly logger = new Logger(InventoryService.name);
 
   constructor(
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
     @Inject('REDIS_SERVICE') private readonly productClient: ClientProxy,
     @InjectRepository(StockMovement)
     private stockMovementRepository: Repository<StockMovement>,
@@ -43,6 +46,7 @@ export class InventoryService implements OnModuleInit {
       console.error(' Redis connection error:', err);
     });
   }
+
   async onModuleInit() {
     console.log('Subscribing to Redis events...');
     this.redisClient.subscribe('product.created', (err, count) => {
@@ -241,15 +245,12 @@ export class InventoryService implements OnModuleInit {
       order: { createdAt: 'DESC' },
     });
 
-    // ✅ Step 1: Collect unique product IDs
     const uniqueProductIds = [...new Set(movements.map((m) => m.productId))];
 
-    // ✅ Step 2: Fetch product names from Product Service
     const productMap: Record<string, string> = await lastValueFrom(
       this.productClient.send('get_products_by_ids', uniqueProductIds),
     );
 
-    // ✅ Step 3: CSV Header and mapping
     const csvStringifier = createObjectCsvStringifier({
       header: [
         { id: 'id', title: 'ID' },
@@ -440,8 +441,20 @@ export class InventoryService implements OnModuleInit {
   }
 
   async inventorySummary(filter?: string, page = 1, limit = 10) {
+    // Generate a cache key based on the filter, page, and limit
+    const cacheKey = `inventory_summary:${filter || 'all'}:${page}:${limit}`;
+    const cachedData = await this.cacheManager.get(cacheKey);
+    console.log('CACHE HIT:', cachedData ? true : false);
+    if (cachedData) {
+      console.log('✅ Returning cached result');
+      return cachedData;
+    }
+
+
+    // Fetch inventory and stock movement data if not in cache
     const inventory = await this.inventoryRepository.find();
     const productIds = inventory.map((product) => product.productId);
+
     const stockMovements = await this.stockMovementRepository
       .createQueryBuilder('stock_movement')
       .select('productId')
@@ -453,6 +466,7 @@ export class InventoryService implements OnModuleInit {
       .where('productId IN (:...productIds)', { productIds })
       .groupBy('productId')
       .getRawMany();
+
     const stockMovementMap = new Map<
       string,
       { inQty: number; outQty: number }
@@ -551,15 +565,27 @@ export class InventoryService implements OnModuleInit {
       (sum, category) => sum + category.totalOutQty,
       0,
     );
+
     const groupedData = Object.values(categoryGroups);
     const offset = (page - 1) * limit;
     const paginatedCategories = groupedData.slice(offset, offset + limit);
-    return {
+
+    // Prepare the response object
+    const result = {
       overallTotalQuantity,
       overallTotalInQty,
       overallTotalOutQty,
       categories: paginatedCategories,
     };
+
+    // Cache the result for subsequent requests
+    // await this.cacheManager.set(cacheKey, result, 300); // Cache for 5 minutes (300 seconds)
+   await (this.cacheManager as any).set(cacheKey, result, { ttl: 300 });
+ // ✅ Correct way
+
+    console.log(`✅ Cached result with key: ${cacheKey}`);
+
+    return result;
   }
 
   //pdf for inventory summary
