@@ -2,14 +2,18 @@
 // import { AppController } from './app.controller';
 // import { AppService } from './app.service';
 // import { TypeOrmModule } from '@nestjs/typeorm';
-// import { ConfigModule,ConfigService} from '@nestjs/config';
+// import { ConfigModule, ConfigService } from '@nestjs/config';
 // import { Inventory } from './entities/inventory.entity';
 // import { StockMovement } from './entities/stock-movement.entity';
 // import { InventoryService } from './services/inventory.service';
-// import { ClientsModule,Transport } from '@nestjs/microservices';
+// import { ClientsModule, Transport } from '@nestjs/microservices';
 // import { InventoryController } from './controllers/inventory.controller';
+// import { CacheModule } from '@nestjs/cache-manager';
+// import * as redisStore from 'cache-manager-ioredis';
+
 // @Module({
 //   imports: [
+//     // Redis for Microservices (Message Broker)
 //     ClientsModule.register([
 //       {
 //         name: 'REDIS_SERVICE',
@@ -17,9 +21,22 @@
 //         options: {
 //           host: 'localhost', // Change to your Redis host
 //           port: 6379, // Default Redis port
+//           db: 0, // Using Redis DB 0 for message broker
 //         },
 //       },
 //     ]),
+
+//     CacheModule.registerAsync({
+//       isGlobal: true,
+//       useFactory: async () => ({
+//         store: redisStore as unknown as string, // 👈 Fix the typing issue here
+//         host: 'localhost', // or your Redis host
+//         port: 6379,
+//         ttl: 300, // optional global TTL
+//       }),
+//     }),
+
+//     // TypeORM Database Setup
 //     TypeOrmModule.forFeature([Inventory, StockMovement]),
 //     ConfigModule.forRoot({
 //       isGlobal: true,
@@ -40,11 +57,10 @@
 //       }),
 //     }),
 //   ],
-//   controllers: [AppController,InventoryController],
+//   controllers: [AppController, InventoryController],
 //   providers: [AppService, InventoryService],
 // })
 // export class AppModule {}
-
 
 import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
@@ -57,47 +73,33 @@ import { InventoryService } from './services/inventory.service';
 import { ClientsModule, Transport } from '@nestjs/microservices';
 import { InventoryController } from './controllers/inventory.controller';
 import { CacheModule } from '@nestjs/cache-manager';
-import * as redisStore from 'cache-manager-ioredis';
+import * as redisStore from 'cache-manager-ioredis'; // ✅ CORRECT import for this lib
 
 @Module({
   imports: [
-    // Redis for Microservices (Message Broker)
+    // Redis Transport for microservices
     ClientsModule.register([
       {
         name: 'REDIS_SERVICE',
         transport: Transport.REDIS,
         options: {
-          host: 'localhost', // Change to your Redis host
-          port: 6379, // Default Redis port
-          db: 0, // Using Redis DB 0 for message broker
+          host: 'localhost',
+          port: 6379,
+          db: 0,
         },
       },
     ]),
 
-    // Redis Cache Setup (Caching with Redis)
-    // CacheModule.registerAsync({
-    //   isGlobal: true, // Global caching across the app
-    //   useFactory: async () => ({
-    //     store: redisStore, // Redis store for caching
-    //     host: 'localhost',
-    //     port: 6379, // Redis default port
-    //     db: 1, // Use Redis DB 1 for caching
-    //     ttl: 60, // Default TTL for cached data in seconds
-    //   }),
-    // }),
-
-    CacheModule.registerAsync({
+    // Redis Cache Module
+    CacheModule.register({
       isGlobal: true,
-      useFactory: async () => ({
-        store: redisStore as unknown as string, // 👈 Fix the typing issue here
-        host: 'localhost', // or your Redis host
-        port: 6379,
-        ttl: 300, // optional global TTL
-      }),
+      store: redisStore,
+      host: 'localhost',
+      port: 6379,
+      ttl: 300,
     }),
 
-    // TypeORM Database Setup
-    TypeOrmModule.forFeature([Inventory, StockMovement]),
+    // Env and TypeORM
     ConfigModule.forRoot({
       isGlobal: true,
     }),
@@ -116,6 +118,8 @@ import * as redisStore from 'cache-manager-ioredis';
         logging: false,
       }),
     }),
+
+    TypeOrmModule.forFeature([Inventory, StockMovement]),
   ],
   controllers: [AppController, InventoryController],
   providers: [AppService, InventoryService],

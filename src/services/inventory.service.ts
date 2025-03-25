@@ -17,6 +17,7 @@ import { lastValueFrom } from 'rxjs';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from '@nestjs/cache-manager';
 
+
 @Injectable()
 export class InventoryService implements OnModuleInit {
   private redisClient: Redis;
@@ -159,6 +160,14 @@ export class InventoryService implements OnModuleInit {
       inventory.quantityAvailable = newQuantity;
       await manager.save(inventory);
 
+      // Clear relevant cache after updating inventory
+      try {
+        await this.clearInventorySummaryCache(); // Make sure this clears the correct cache
+      } catch (cacheError) {
+        console.warn('⚠️ Failed to clear inventory summary cache:', cacheError);
+      }
+
+      // Create and save the stock movement record
       const stockMovement = this.stockMovementRepository.create({
         productId,
         type,
@@ -440,7 +449,12 @@ export class InventoryService implements OnModuleInit {
     });
   }
 
+
   async inventorySummary(filter?: string, page = 1, limit = 10) {
+    // Validate page and limit
+    if (page < 1) page = 1;
+    if (limit < 1) limit = 10;
+
     // Generate a cache key based on the filter, page, and limit
     const cacheKey = `inventory_summary:${filter || 'all'}:${page}:${limit}`;
     const cachedData = await this.cacheManager.get(cacheKey);
@@ -449,7 +463,6 @@ export class InventoryService implements OnModuleInit {
       console.log('✅ Returning cached result');
       return cachedData;
     }
-
 
     // Fetch inventory and stock movement data if not in cache
     const inventory = await this.inventoryRepository.find();
@@ -488,6 +501,7 @@ export class InventoryService implements OnModuleInit {
         : true,
     );
 
+    // Group products by category for quantity calculation
     type CategoryGroup = {
       category: string;
       subTotal: number;
@@ -514,7 +528,6 @@ export class InventoryService implements OnModuleInit {
             inQty: 0,
             outQty: 0,
           };
-
           const category = product.category
             ? product.category.category
             : 'Uncategorized';
@@ -551,40 +564,50 @@ export class InventoryService implements OnModuleInit {
         {} as Record<string, CategoryGroup>,
       );
 
-    const overallTotalQuantity = Object.values(categoryGroups).reduce(
-      (sum, category) => sum + category.subTotal,
+    // Paginate the products within each category
+    Object.keys(categoryGroups).forEach((category) => {
+      const categoryGroup = categoryGroups[category];
+      const offset = (page - 1) * limit;
+      categoryGroup.products = categoryGroup.products.slice(
+        offset,
+        offset + limit,
+      );
+    });
+
+    // Flatten the products from all categories for pagination (if needed)
+    const allProducts = Object.values(categoryGroups).flatMap(
+      (categoryGroup) => categoryGroup.products,
+    );
+
+    // Calculate overall totals
+    const overallTotalQuantity = allProducts.reduce(
+      (sum, product) => sum + product.quantityAvailable,
+      0,
+    );
+    const overallTotalInQty = allProducts.reduce(
+      (sum, product) => sum + product.inQty,
+      0,
+    );
+    const overallTotalOutQty = allProducts.reduce(
+      (sum, product) => sum + product.outQty,
       0,
     );
 
-    const overallTotalInQty = Object.values(categoryGroups).reduce(
-      (sum, category) => sum + category.totalInQty,
-      0,
-    );
-
-    const overallTotalOutQty = Object.values(categoryGroups).reduce(
-      (sum, category) => sum + category.totalOutQty,
-      0,
-    );
-
-    const groupedData = Object.values(categoryGroups);
-    const offset = (page - 1) * limit;
-    const paginatedCategories = groupedData.slice(offset, offset + limit);
-
-    // Prepare the response object
+    // Prepare the result object
     const result = {
+      success: true,
+      message: 'Inventory summary fetched successfully',
       overallTotalQuantity,
       overallTotalInQty,
       overallTotalOutQty,
-      categories: paginatedCategories,
+      categories: Object.values(categoryGroups), // Return all category groups (not paginated)
+      products: allProducts, // Flattened paginated product list (if you need)
     };
 
     // Cache the result for subsequent requests
-    // await this.cacheManager.set(cacheKey, result, 300); // Cache for 5 minutes (300 seconds)
-   await (this.cacheManager as any).set(cacheKey, result, { ttl: 300 });
- // ✅ Correct way
+    await (this.cacheManager as any).set(cacheKey, result, { ttl: 300 });
 
     console.log(`✅ Cached result with key: ${cacheKey}`);
-
     return result;
   }
 
@@ -847,6 +870,16 @@ export class InventoryService implements OnModuleInit {
     csvContent += `Total Out Qty,${summary.overallTotalOutQty}\n`;
     csvContent += `Total Available,${summary.overallTotalQuantity}\n`;
     return Buffer.from(csvContent, 'utf-8');
+  }
+
+  async clearInventorySummaryCache(
+    filter?: string,
+    page = 1,
+    limit = 10,
+  ): Promise<void> {
+    const cacheKey = `inventory_summary:${filter || 'all'}:${page}:${limit}`;
+    console.log(`🧹 Clearing cache for key: ${cacheKey}`);
+    await this.cacheManager.del(cacheKey); // Delete the cache by key
   }
 }
 
