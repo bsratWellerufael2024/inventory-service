@@ -28,4 +28,7 @@ export class Inventory {
 
   @UpdateDateColumn({ type: 'timestamp' })
   updatedAt: Date; // Auto-set when a record is updated
+
+  @Column({ nullable: true })
+  productCode: string;
 }

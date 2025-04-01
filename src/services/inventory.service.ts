@@ -2,7 +2,7 @@ import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Inventory } from 'src/entities/inventory.entity';
-import Redis from 'ioredis';
+import   Redis from 'ioredis';
 import { StockMovement } from 'src/entities/stock-movement.entity';
 import { DataSource } from 'typeorm';
 import { RecordStockMovementDto } from 'src/dto/record-stock-movement.dto';
@@ -17,64 +17,167 @@ import { lastValueFrom } from 'rxjs';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from '@nestjs/cache-manager';
 
-
+import Keyv from 'keyv'; // Import Keyv here
 @Injectable()
 export class InventoryService implements OnModuleInit {
   private redisClient: Redis;
+  private pubSubClient: Redis;
+  private subscriberClient: Redis;
+  private commandClient: Redis;
   private readonly logger = new Logger(InventoryService.name);
+
+  // constructor(
+  //   @Inject(CACHE_MANAGER) private cacheManager: Cache,
+  //   @Inject('REDIS_SERVICE') private readonly productClient: ClientProxy,
+  //   @InjectRepository(StockMovement)
+  //   private stockMovementRepository: Repository<StockMovement>,
+
+  //   @InjectRepository(Inventory)
+  //   private inventoryRepository: Repository<Inventory>,
+
+  //   private dataSource: DataSource,
+  // ) {
+  //   this.redisClient = new Redis({
+  //     host: 'localhost',
+  //     port: 6379,
+  //   });
+
+  //   this.redisClient.on('connect', () => {
+  //     console.log('Connected to Redis');
+  //   });
+
+  //   this.redisClient.on('error', (err) => {
+  //     console.error(' Redis connection error:', err);
+  //   });
+  // }
+  /**
+   * Retrieves cache keys matching a given pattern.
+   */
+  // private async getCacheKeys(pattern: string): Promise<string[]> {
+  //   return new Promise((resolve, reject) => {
+  //     const keys: string[] = [];
+  //     const stream = this.redisClient.scanStream({
+  //       match: pattern,
+  //       count: 100, // Process 100 keys at a time
+  //     });
+
+  //     stream.on('data', (resultKeys) => {
+  //       keys.push(...resultKeys);
+  //     });
+
+  //     stream.on('end', () => resolve(keys));
+  //     stream.on('error', (err) => reject(err));
+  //   });
+  // }
+
+  // ✅ Separate Redis client for Pub/Sub
+  private cacheClient: Redis; // ✅ Separate Redis client for caching operations
 
   constructor(
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
     @Inject('REDIS_SERVICE') private readonly productClient: ClientProxy,
     @InjectRepository(StockMovement)
     private stockMovementRepository: Repository<StockMovement>,
-
     @InjectRepository(Inventory)
     private inventoryRepository: Repository<Inventory>,
-
     private dataSource: DataSource,
   ) {
-    this.redisClient = new Redis({
-      host: 'localhost',
-      port: 6379,
-    });
+    // ✅ Redis client for Pub/Sub (listening to events)
+    this.pubSubClient = new Redis({ host: 'localhost', port: 6379 });
 
-    this.redisClient.on('connect', () => {
-      console.log('Connected to Redis');
-    });
+    // ✅ Redis client for cache operations (deleting keys)
+    this.cacheClient = new Redis({ host: 'localhost', port: 6379 });
 
-    this.redisClient.on('error', (err) => {
-      console.error(' Redis connection error:', err);
-    });
+    this.pubSubClient.on('connect', () =>
+      console.log('Connected to Redis Pub/Sub'),
+    );
+    this.pubSubClient.on('error', (err) =>
+      console.error('Redis Pub/Sub connection error:', err),
+    );
+
+    this.cacheClient.on('connect', () =>
+      console.log('Connected to Redis Cache'),
+    );
+    this.cacheClient.on('error', (err) =>
+      console.error('Redis Cache connection error:', err),
+    );
   }
 
   async onModuleInit() {
     console.log('Subscribing to Redis events...');
-    this.redisClient.subscribe('product.created', (err, count) => {
+
+    if (!this.pubSubClient) {
+      console.error('Error: Pub/Sub Redis client is not initialized.');
+      return;
+    }
+
+    this.pubSubClient.subscribe('product.created', (err, count) => {
       if (err) {
-        console.error(' Redis subscription failed:', err);
+        console.error('Redis subscription error:', err);
       } else {
         console.log(`Subscribed to ${count} channels.`);
       }
     });
 
-    this.redisClient.on('message', async (channel, message) => {
-      if (channel === 'product.created') {
-        console.log(` Received message on channel ${channel}: ${message}`);
-        try {
-          const product = JSON.parse(message);
-          console.log('Parsed product:', product);
-          await this.initializeStockLevel(product);
-        } catch (err) {
-          console.error('Error parsing product message:', err);
-        }
-      }
+    this.pubSubClient.on('message', async (channel, message) => {
+      console.log(`Received message from ${channel}: ${message}`);
+
+      // ✅ Clear cache for a specific key format
+      await this.invalidateInventoryCache(1, 100); // Example: page 1, limit 100
     });
   }
 
+  /**
+   * Clears cached inventory summaries based on the **exact** key format.
+   */
+  async invalidateInventoryCache(page: number, limit: number) {
+    try {
+      const cacheKey = `inventory_summary:all:${page}:${limit}`;
+      const exists = await this.cacheClient.exists(cacheKey);
+
+      if (exists) {
+        await this.cacheClient.del(cacheKey);
+        console.log(`✅ Cleared cached inventory summary for key: ${cacheKey}`);
+      } else {
+        console.log(
+          `⚠️ No cached inventory summary found for key: ${cacheKey}`,
+        );
+      }
+    } catch (error) {
+      console.error(
+        '[InventoryService] Error clearing cached inventory summaries:',
+        error,
+      );
+    }
+  }
+
+  // async onModuleInit() {
+  //   console.log('Subscribing to Redis events...');
+  //   this.redisClient.subscribe('product.created', (err, count) => {
+  //     if (err) {
+  //       console.error(' Redis subscription failed:', err);
+  //     } else {
+  //       console.log(`Subscribed to ${count} channels.`);
+  //     }
+  //   });
+
+  //   this.redisClient.on('message', async (channel, message) => {
+  //     if (channel === 'product.created') {
+  //       console.log(` Received message on channel ${channel}: ${message}`);
+  //       try {
+  //         const product = JSON.parse(message);
+  //         console.log('Parsed product:', product);
+  //         await this.initializeStockLevel(product);
+  //       } catch (err) {
+  //         console.error('Error parsing product message:', err);
+  //       }
+  //     }
+  //   });
+  // }
+
   async initializeStockLevel(message: any) {
     try {
-      const { productId, openingQty } = message?.data || message;
+      const { productId, openingQty, productCode } = message?.data || message;
       console.log(
         '[InventoryService] initializeStockLevel() called with:',
         message,
@@ -110,14 +213,17 @@ export class InventoryService implements OnModuleInit {
         console.log(
           `[InventoryService] No existing inventory. Creating new inventory for product ID ${productId}`,
         );
+
         const newInventory = this.inventoryRepository.create({
           productId,
+          productCode: productCode || null,
           quantityAvailable: openingQty || 0,
           lowStockThreshold: 5,
           lastRestocked: new Date(),
         });
 
         await this.inventoryRepository.save(newInventory);
+        await this.invalidateInventorySummaryCache();
         console.log(
           `[InventoryService] Stock initialized for product ID ${productId}`,
         );
@@ -137,7 +243,7 @@ export class InventoryService implements OnModuleInit {
         throw new Error('ActivatedBy (username) is required');
       }
 
-      let inventory = await manager.findOne(Inventory, {
+      const inventory = await manager.findOne(Inventory, {
         where: { productId },
       });
 
@@ -160,16 +266,17 @@ export class InventoryService implements OnModuleInit {
       inventory.quantityAvailable = newQuantity;
       await manager.save(inventory);
 
-      // Clear relevant cache after updating inventory
+      // 🔁 Clear relevant cache
       try {
-        await this.clearInventorySummaryCache(); // Make sure this clears the correct cache
+        await this.clearInventorySummaryCache();
       } catch (cacheError) {
         console.warn('⚠️ Failed to clear inventory summary cache:', cacheError);
       }
 
-      // Create and save the stock movement record
+      // ✅ Create and save the stock movement record, including productCode
       const stockMovement = this.stockMovementRepository.create({
         productId,
+        productCode: inventory.productCode || null,
         type,
         quantity,
         reason,
@@ -449,7 +556,6 @@ export class InventoryService implements OnModuleInit {
     });
   }
 
-
   async inventorySummary(filter?: string, page = 1, limit = 10) {
     // Validate page and limit
     if (page < 1) page = 1;
@@ -460,7 +566,8 @@ export class InventoryService implements OnModuleInit {
     const cachedData = await this.cacheManager.get(cacheKey);
     console.log('CACHE HIT:', cachedData ? true : false);
     if (cachedData) {
-      console.log('✅ Returning cached result');
+      console.log('Returning cached result');
+      //  console.log(cachedData);
       return cachedData;
     }
 
@@ -509,6 +616,8 @@ export class InventoryService implements OnModuleInit {
       totalOutQty: number;
       products: {
         productName: string;
+        id:number;
+        code:string;
         unit: string;
         price: number;
         specification: string;
@@ -551,6 +660,8 @@ export class InventoryService implements OnModuleInit {
 
           acc[category].products.push({
             productName: product.productName,
+            id:product.productId,
+            code:product.productCode,
             unit: product.baseUnit,
             price: product.selling_price,
             specification: product.specification,
@@ -605,8 +716,7 @@ export class InventoryService implements OnModuleInit {
     };
 
     // Cache the result for subsequent requests
-    await (this.cacheManager as any).set(cacheKey, result, { ttl: 300 });
-
+    await (this.cacheManager as any).set(cacheKey, result, { ttl: 3600 });
     console.log(`✅ Cached result with key: ${cacheKey}`);
     return result;
   }
@@ -816,12 +926,10 @@ export class InventoryService implements OnModuleInit {
     let csvContent = '';
     const divider =
       '============================================================\n';
-
     for (const category of summary.categories) {
       csvContent += `${divider}`;
       csvContent += `CATEGORY: ${category.category.toUpperCase()}\n`;
       csvContent += `${divider}`;
-
       const csvStringifier = createObjectCsvStringifier({
         header: [
           { id: 'productName', title: 'Product Name' },
@@ -862,7 +970,6 @@ export class InventoryService implements OnModuleInit {
 
       csvContent += `Subtotal, , , ${subtotal.inQty}, ${subtotal.outQty}, ${subtotal.available}, ${subtotal.totalPrice.toFixed(2)}\n\n`;
     }
-
     csvContent += divider;
     csvContent += 'OVERALL SUMMARY\n';
     csvContent += divider;
@@ -875,11 +982,38 @@ export class InventoryService implements OnModuleInit {
   async clearInventorySummaryCache(
     filter?: string,
     page = 1,
-    limit = 10,
+    limit = 100,
   ): Promise<void> {
     const cacheKey = `inventory_summary:${filter || 'all'}:${page}:${limit}`;
-    console.log(`🧹 Clearing cache for key: ${cacheKey}`);
+    console.log(`Clearing cache for key: ${cacheKey}`);
     await this.cacheManager.del(cacheKey); // Delete the cache by key
+  }
+
+  async invalidateInventorySummaryCache(
+    filter: string = 'all',
+    page: number = 1,
+    limit: number = 100,
+  ): Promise<void> {
+    try {
+      // Construct the cache key dynamically based on the filter, page, and limit values
+      const keyPattern = `inventory_summary:${filter}:${page}:${limit}`;
+
+      console.log('[InventoryService] Looking for cache key:', keyPattern);
+
+      // Check if the key exists
+      const keyExists = await this.redisClient.exists(keyPattern);
+
+      if (keyExists === 0) {
+        console.log('[InventoryService] No cache key found for:', keyPattern);
+        return;
+      }
+
+      // Delete the cache key
+      await this.redisClient.del(keyPattern);
+      console.log(`[InventoryService] Invalidated cache key: ${keyPattern}`);
+    } catch (error) {
+      this.logger.error('[InventoryService] Error invalidating cache:', error);
+    }
   }
 }
 

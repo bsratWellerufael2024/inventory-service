@@ -10,6 +10,9 @@ import { InjectRepository, } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Inventory } from "src/entities/inventory.entity";
 import { StockMovement } from "src/entities/stock-movement.entity";
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+// import { Cache } from '@nestjs/cache-manager';
+import { Redis } from 'ioredis';  // Directly import Redis
 @Controller()
 export class InventoryController {
   private readonly logger = new Logger(InventoryService.name);
@@ -18,6 +21,9 @@ export class InventoryController {
     private inventoryRepository: Repository<Inventory>,
     private inventoryService: InventoryService,
     @Inject('REDIS_SERVICE') private readonly productClient: ClientProxy,
+
+     @Inject('REDIS_CLIENT') // Inject Redis client directly
+    private readonly redisClient: Redis,
   ) {}
 
   @MessagePattern('movement_recorded')
@@ -76,18 +82,52 @@ export class InventoryController {
   async getInventorySummary(
     @Payload() data: { filter?: string; page?: number; limit?: number },
   ) {
-    const { filter, page = 1, limit = 10 } = data;
+    const { filter, page = 1, limit = 100 } = data;
     return await this.inventoryService.inventorySummary(filter, page, limit);
   }
 
-  @EventPattern('product.updated')
-  async handleProductUpdated(@Payload() message: any) {
-    console.log(
-      '[InventoryController] Received product.updated event with message:',
-      message,
-    );
-    await this.inventoryService.initializeStockLevel(message);
-  }
+  // @EventPattern('product.updated')
+  // async handleProductUpdated(@Payload() message: any) {
+  //   console.log(
+  //     '[InventoryController] Received product.updated event with message:',
+  //     message,
+  //   );
+  //   await this.inventoryService.initializeStockLevel(message);
+  // }
+  // @EventPattern('product.deleted')
+  // async handleProductDeleted(@Payload() data: { productId: number }) {
+  //   this.logger.log(`Received product.deleted event: ${JSON.stringify(data)}`);
+
+  //   const { productId } = data;
+
+  //   if (!productId) {
+  //     this.logger.error(` Missing productId in event payload`);
+  //     return;
+  //   }
+
+  //   try {
+  //     const inventoryRecord = await this.inventoryRepository.findOne({
+  //       where: { productId },
+  //     });
+
+  //     if (inventoryRecord) {
+  //       await this.inventoryRepository.remove(inventoryRecord);
+  //       this.logger.log(
+  //         `Successfully deleted inventory record for Product ID: ${productId}`,
+  //       );
+  //     } else {
+  //       this.logger.warn(
+  //         ` No inventory record found for Product ID: ${productId}`,
+  //       );
+  //     }
+  //   } catch (error) {
+  //     this.logger.error(
+  //       `Error occurred while deleting inventory for Product ID: ${productId}`,
+  //       error,
+  //     );
+  //   }
+  // }
+
   @EventPattern('product.deleted')
   async handleProductDeleted(@Payload() data: { productId: number }) {
     this.logger.log(`Received product.deleted event: ${JSON.stringify(data)}`);
@@ -95,7 +135,7 @@ export class InventoryController {
     const { productId } = data;
 
     if (!productId) {
-      this.logger.error(` Missing productId in event payload`);
+      this.logger.error(`Missing productId in event payload`);
       return;
     }
 
@@ -111,8 +151,25 @@ export class InventoryController {
         );
       } else {
         this.logger.warn(
-          ` No inventory record found for Product ID: ${productId}`,
+          `No inventory record found for Product ID: ${productId}`,
         );
+      }
+
+      // Directly clear the Redis cache based on filter, page, and limit
+      // Adjust these values accordingly if you want to clear specific cache keys
+      const filters = ['all', 'category1', 'category2']; // Example filter values
+      const pages = [1, 2, 3]; // Example page values
+      const limits = [10, 20, 30]; // Example limit values
+
+      // Loop through filter, page, and limit values and delete the corresponding cache keys
+      for (const filter of filters) {
+        for (const page of pages) {
+          for (const limit of limits) {
+            const cacheKey = `inventory_summary:${filter}:${page}:${limit}`;
+            await this.redisClient.del(cacheKey);
+            this.logger.log(`Cleared cache key: ${cacheKey}`);
+          }
+        }
       }
     } catch (error) {
       this.logger.error(
@@ -122,3 +179,6 @@ export class InventoryController {
     }
   }
 }
+  
+
+
