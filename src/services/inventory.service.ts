@@ -16,8 +16,9 @@ import * as path from 'path';
 import { lastValueFrom } from 'rxjs';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from '@nestjs/cache-manager';
-
 import Keyv from 'keyv'; // Import Keyv here
+import { error } from 'console';
+
 @Injectable()
 export class InventoryService implements OnModuleInit {
   private redisClient: Redis;
@@ -26,154 +27,54 @@ export class InventoryService implements OnModuleInit {
   private commandClient: Redis;
   private readonly logger = new Logger(InventoryService.name);
 
-  // constructor(
-  //   @Inject(CACHE_MANAGER) private cacheManager: Cache,
-  //   @Inject('REDIS_SERVICE') private readonly productClient: ClientProxy,
-  //   @InjectRepository(StockMovement)
-  //   private stockMovementRepository: Repository<StockMovement>,
-
-  //   @InjectRepository(Inventory)
-  //   private inventoryRepository: Repository<Inventory>,
-
-  //   private dataSource: DataSource,
-  // ) {
-  //   this.redisClient = new Redis({
-  //     host: 'localhost',
-  //     port: 6379,
-  //   });
-
-  //   this.redisClient.on('connect', () => {
-  //     console.log('Connected to Redis');
-  //   });
-
-  //   this.redisClient.on('error', (err) => {
-  //     console.error(' Redis connection error:', err);
-  //   });
-  // }
-  /**
-   * Retrieves cache keys matching a given pattern.
-   */
-  // private async getCacheKeys(pattern: string): Promise<string[]> {
-  //   return new Promise((resolve, reject) => {
-  //     const keys: string[] = [];
-  //     const stream = this.redisClient.scanStream({
-  //       match: pattern,
-  //       count: 100, // Process 100 keys at a time
-  //     });
-
-  //     stream.on('data', (resultKeys) => {
-  //       keys.push(...resultKeys);
-  //     });
-
-  //     stream.on('end', () => resolve(keys));
-  //     stream.on('error', (err) => reject(err));
-  //   });
-  // }
-
-  // ✅ Separate Redis client for Pub/Sub
-  private cacheClient: Redis; // ✅ Separate Redis client for caching operations
-
   constructor(
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
     @Inject('REDIS_SERVICE') private readonly productClient: ClientProxy,
     @InjectRepository(StockMovement)
     private stockMovementRepository: Repository<StockMovement>,
+
     @InjectRepository(Inventory)
     private inventoryRepository: Repository<Inventory>,
+
     private dataSource: DataSource,
   ) {
-    // ✅ Redis client for Pub/Sub (listening to events)
-    this.pubSubClient = new Redis({ host: 'localhost', port: 6379 });
+    this.redisClient = new Redis({
+      host: 'localhost',
+      port: 6379,
+    });
 
-    // ✅ Redis client for cache operations (deleting keys)
-    this.cacheClient = new Redis({ host: 'localhost', port: 6379 });
+    this.redisClient.on('connect', () => {
+      console.log('Connected to Redis');
+    });
 
-    this.pubSubClient.on('connect', () =>
-      console.log('Connected to Redis Pub/Sub'),
-    );
-    this.pubSubClient.on('error', (err) =>
-      console.error('Redis Pub/Sub connection error:', err),
-    );
-
-    this.cacheClient.on('connect', () =>
-      console.log('Connected to Redis Cache'),
-    );
-    this.cacheClient.on('error', (err) =>
-      console.error('Redis Cache connection error:', err),
-    );
+    this.redisClient.on('error', (err) => {
+      console.error(' Redis connection error:', err);
+    });
   }
 
   async onModuleInit() {
     console.log('Subscribing to Redis events...');
-
-    if (!this.pubSubClient) {
-      console.error('Error: Pub/Sub Redis client is not initialized.');
-      return;
-    }
-
-    this.pubSubClient.subscribe('product.created', (err, count) => {
+    this.redisClient.subscribe('product.created', (err, count) => {
       if (err) {
-        console.error('Redis subscription error:', err);
+        console.error(' Redis subscription failed:', err);
       } else {
         console.log(`Subscribed to ${count} channels.`);
       }
     });
 
-    this.pubSubClient.on('message', async (channel, message) => {
-      console.log(`Received message from ${channel}: ${message}`);
-
-      // ✅ Clear cache for a specific key format
-      await this.invalidateInventoryCache(1, 100); // Example: page 1, limit 100
+    this.redisClient.on('message', async (channel, message) => {
+      if (channel === 'product.created') {
+        console.log(` Received message on channel ${channel}: ${message}`);
+        try {
+          const product = JSON.parse(message);
+          console.log('Parsed product:', product);
+          await this.initializeStockLevel(product);
+        } catch (err) {
+          console.error('Error parsing product message:', err);
+        }
+      }
     });
   }
-
-  /**
-   * Clears cached inventory summaries based on the **exact** key format.
-   */
-  async invalidateInventoryCache(page: number, limit: number) {
-    try {
-      const cacheKey = `inventory_summary:all:${page}:${limit}`;
-      const exists = await this.cacheClient.exists(cacheKey);
-
-      if (exists) {
-        await this.cacheClient.del(cacheKey);
-        console.log(`✅ Cleared cached inventory summary for key: ${cacheKey}`);
-      } else {
-        console.log(
-          `⚠️ No cached inventory summary found for key: ${cacheKey}`,
-        );
-      }
-    } catch (error) {
-      console.error(
-        '[InventoryService] Error clearing cached inventory summaries:',
-        error,
-      );
-    }
-  }
-
-  // async onModuleInit() {
-  //   console.log('Subscribing to Redis events...');
-  //   this.redisClient.subscribe('product.created', (err, count) => {
-  //     if (err) {
-  //       console.error(' Redis subscription failed:', err);
-  //     } else {
-  //       console.log(`Subscribed to ${count} channels.`);
-  //     }
-  //   });
-
-  //   this.redisClient.on('message', async (channel, message) => {
-  //     if (channel === 'product.created') {
-  //       console.log(` Received message on channel ${channel}: ${message}`);
-  //       try {
-  //         const product = JSON.parse(message);
-  //         console.log('Parsed product:', product);
-  //         await this.initializeStockLevel(product);
-  //       } catch (err) {
-  //         console.error('Error parsing product message:', err);
-  //       }
-  //     }
-  //   });
-  // }
 
   async initializeStockLevel(message: any) {
     try {
@@ -223,8 +124,13 @@ export class InventoryService implements OnModuleInit {
         });
 
         await this.inventoryRepository.save(newInventory);
-        await this.invalidateInventorySummaryCache();
-        console.log(
+        try{
+            await this.clearInventorySummaryCache()
+        }catch(error){
+          console.log(error);
+        }
+
+         console.log(
           `[InventoryService] Stock initialized for product ID ${productId}`,
         );
       }
@@ -987,33 +893,6 @@ export class InventoryService implements OnModuleInit {
     const cacheKey = `inventory_summary:${filter || 'all'}:${page}:${limit}`;
     console.log(`Clearing cache for key: ${cacheKey}`);
     await this.cacheManager.del(cacheKey); // Delete the cache by key
-  }
-
-  async invalidateInventorySummaryCache(
-    filter: string = 'all',
-    page: number = 1,
-    limit: number = 100,
-  ): Promise<void> {
-    try {
-      // Construct the cache key dynamically based on the filter, page, and limit values
-      const keyPattern = `inventory_summary:${filter}:${page}:${limit}`;
-
-      console.log('[InventoryService] Looking for cache key:', keyPattern);
-
-      // Check if the key exists
-      const keyExists = await this.redisClient.exists(keyPattern);
-
-      if (keyExists === 0) {
-        console.log('[InventoryService] No cache key found for:', keyPattern);
-        return;
-      }
-
-      // Delete the cache key
-      await this.redisClient.del(keyPattern);
-      console.log(`[InventoryService] Invalidated cache key: ${keyPattern}`);
-    } catch (error) {
-      this.logger.error('[InventoryService] Error invalidating cache:', error);
-    }
   }
 }
 
