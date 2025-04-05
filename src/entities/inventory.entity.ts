@@ -31,4 +31,7 @@ export class Inventory {
 
   @Column({ nullable: true })
   productCode: string;
+
+  @Column({ nullable: true })
+  productName: string;
 }

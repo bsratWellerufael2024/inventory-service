@@ -85,49 +85,6 @@ export class InventoryController {
     const { filter, page = 1, limit = 100 } = data;
     return await this.inventoryService.inventorySummary(filter, page, limit);
   }
-
-  // @EventPattern('product.updated')
-  // async handleProductUpdated(@Payload() message: any) {
-  //   console.log(
-  //     '[InventoryController] Received product.updated event with message:',
-  //     message,
-  //   );
-  //   await this.inventoryService.initializeStockLevel(message);
-  // }
-  // @EventPattern('product.deleted')
-  // async handleProductDeleted(@Payload() data: { productId: number }) {
-  //   this.logger.log(`Received product.deleted event: ${JSON.stringify(data)}`);
-
-  //   const { productId } = data;
-
-  //   if (!productId) {
-  //     this.logger.error(` Missing productId in event payload`);
-  //     return;
-  //   }
-
-  //   try {
-  //     const inventoryRecord = await this.inventoryRepository.findOne({
-  //       where: { productId },
-  //     });
-
-  //     if (inventoryRecord) {
-  //       await this.inventoryRepository.remove(inventoryRecord);
-  //       this.logger.log(
-  //         `Successfully deleted inventory record for Product ID: ${productId}`,
-  //       );
-  //     } else {
-  //       this.logger.warn(
-  //         ` No inventory record found for Product ID: ${productId}`,
-  //       );
-  //     }
-  //   } catch (error) {
-  //     this.logger.error(
-  //       `Error occurred while deleting inventory for Product ID: ${productId}`,
-  //       error,
-  //     );
-  //   }
-  // }
-
   @EventPattern('product.deleted')
   async handleProductDeleted(@Payload() data: { productId: number }) {
     this.logger.log(`Received product.deleted event: ${JSON.stringify(data)}`);
@@ -178,6 +135,8 @@ export class InventoryController {
       );
     }
   }
+
+  
 }
   
 

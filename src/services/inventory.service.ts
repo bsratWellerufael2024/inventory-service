@@ -78,7 +78,7 @@ export class InventoryService implements OnModuleInit {
 
   async initializeStockLevel(message: any) {
     try {
-      const { productId, openingQty, productCode } = message?.data || message;
+      const { productId, openingQty, productCode,productName} = message?.data || message;
       console.log(
         '[InventoryService] initializeStockLevel() called with:',
         message,
@@ -118,6 +118,7 @@ export class InventoryService implements OnModuleInit {
         const newInventory = this.inventoryRepository.create({
           productId,
           productCode: productCode || null,
+          productName:productName||null,
           quantityAvailable: openingQty || 0,
           lowStockThreshold: 5,
           lastRestocked: new Date(),
