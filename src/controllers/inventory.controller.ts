@@ -22,7 +22,7 @@ export class InventoryController {
     private inventoryService: InventoryService,
     @Inject('REDIS_SERVICE') private readonly productClient: ClientProxy,
 
-     @Inject('REDIS_CLIENT') // Inject Redis client directly
+    @Inject('REDIS_CLIENT') // Inject Redis client directly
     private readonly redisClient: Redis,
   ) {}
 
@@ -136,7 +136,18 @@ export class InventoryController {
     }
   }
 
-  
+  @EventPattern('product.updated')
+  async handleProductUpdated(payload: {
+    productId: number;
+    productName: string;
+    openingQty: number;
+  }) {
+    await this.inventoryService.clearInventorySummaryCache();
+
+    console.log(
+      `[InventoryController] Cache invalidated due to product update`,
+    );
+  }
 }
   
 

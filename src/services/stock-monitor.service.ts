@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron} from '@nestjs/schedule'; // 👈 Import cron decorator
+import { Cron,CronExpression} from '@nestjs/schedule'; // 👈 Import cron decorator
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan } from 'typeorm';
@@ -18,8 +18,9 @@ export class StockMonitorService {
   ) {}
 
    @Cron('0 0 */2 * *') // 👈 Runs every 2 days
-   async checkLowStock() {
-   const lowStockThreshold = 5;
+  // @Cron('*/1 * * * *')
+  async checkLowStock() {
+    const lowStockThreshold = 5;
 
     try {
       const lowStockItems = await this.inventoryRepo.find({
