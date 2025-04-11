@@ -108,14 +108,14 @@ import { ScheduleModule } from '@nestjs/schedule';
       provide: 'REDIS_CLIENT',
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
-        console.log('SMTP Config:', {
-          host: process.env.SMTP_HOST,
-          port: process.env.SMTP_PORT,
-          secure: process.env.SMTP_SECURE,
-          user: process.env.SMTP_USER,
-          pass: process.env.SMTP_PASS,
-          from: process.env.SMTP_FROM,
-        });
+        // console.log('SMTP Config:', {
+        //   host: process.env.SMTP_HOST,
+        //   port: process.env.SMTP_PORT,
+        //   secure: process.env.SMTP_SECURE,
+        //   user: process.env.SMTP_USER,
+        //   pass: process.env.SMTP_PASS,
+        //   from: process.env.SMTP_FROM,
+        // });
 
         return new Redis({
           host: configService.get<string>('REDIS_HOST'),
