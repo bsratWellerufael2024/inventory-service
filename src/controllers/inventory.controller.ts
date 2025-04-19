@@ -10,7 +10,6 @@ import { InjectRepository, } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Inventory } from "src/entities/inventory.entity";
 import { StockMovement } from "src/entities/stock-movement.entity";
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
 // import { Cache } from '@nestjs/cache-manager';
 import { Redis } from 'ioredis';  // Directly import Redis
 @Controller()
@@ -39,10 +38,11 @@ export class InventoryController {
       activatedBy?: string;
       startDate?: string;
       endDate?: string;
+      timeRange?: 'daily' | 'weekly' | 'monthly' | 'yearly'; // ✅ Add this
       page?: number;
       limit?: number;
     },
-  ): Promise<{ data: StockMovement[]; total: number }> {
+  ): Promise<any> {
     return this.inventoryService.getStockMovements(filters);
   }
 

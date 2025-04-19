@@ -78,7 +78,8 @@ export class InventoryService implements OnModuleInit {
 
   async initializeStockLevel(message: any) {
     try {
-      const { productId, openingQty, productCode,productName} = message?.data || message;
+      const { productId, openingQty, productCode, productName } =
+        message?.data || message;
       console.log(
         '[InventoryService] initializeStockLevel() called with:',
         message,
@@ -118,20 +119,20 @@ export class InventoryService implements OnModuleInit {
         const newInventory = this.inventoryRepository.create({
           productId,
           productCode: productCode || null,
-          productName:productName||null,
+          productName: productName || null,
           quantityAvailable: openingQty || 0,
           lowStockThreshold: 5,
           lastRestocked: new Date(),
         });
 
         await this.inventoryRepository.save(newInventory);
-        try{
-            await this.clearInventorySummaryCache()
-        }catch(error){
+        try {
+          await this.clearInventorySummaryCache();
+        } catch (error) {
           console.log(error);
         }
 
-         console.log(
+        console.log(
           `[InventoryService] Stock initialized for product ID ${productId}`,
         );
       }
@@ -199,6 +200,7 @@ export class InventoryService implements OnModuleInit {
     activatedBy?: string;
     startDate?: string;
     endDate?: string;
+    timeRange?: 'daily' | 'weekly' | 'monthly' | 'yearly';
     page?: number;
     limit?: number;
   }) {
@@ -207,6 +209,7 @@ export class InventoryService implements OnModuleInit {
       activatedBy,
       startDate,
       endDate,
+      timeRange,
       page = 1,
       limit = 10,
     } = filters;
@@ -220,6 +223,33 @@ export class InventoryService implements OnModuleInit {
       query.andWhere('stockMovement.activatedBy = :activatedBy', {
         activatedBy,
       });
+
+    // ✅ Time range filter
+    const now = moment();
+    if (timeRange) {
+      let start: moment.Moment;
+      switch (timeRange) {
+        case 'daily':
+          start = now.clone().startOf('day');
+          break;
+        case 'weekly':
+          start = now.clone().startOf('week');
+          break;
+        case 'monthly':
+          start = now.clone().startOf('month');
+          break;
+        case 'yearly':
+          start = now.clone().startOf('year');
+          break;
+        default:
+          start = null;
+      }
+      if (start)
+        query.andWhere('stockMovement.createdAt >= :start', {
+          start: start.toISOString(),
+        });
+    }
+
     if (startDate)
       query.andWhere('stockMovement.createdAt >= :startDate', { startDate });
     if (endDate)
@@ -243,7 +273,6 @@ export class InventoryService implements OnModuleInit {
       console.error('Error fetching product names:', err.message);
     }
 
-    const now = moment();
     const formattedData = data.map((movement) => ({
       ...movement,
       productName: productMap[movement.productId] || 'Unknown Product',
@@ -523,8 +552,8 @@ export class InventoryService implements OnModuleInit {
       totalOutQty: number;
       products: {
         productName: string;
-        id:number;
-        code:string;
+        id: number;
+        code: string;
         unit: string;
         price: number;
         specification: string;
@@ -567,8 +596,8 @@ export class InventoryService implements OnModuleInit {
 
           acc[category].products.push({
             productName: product.productName,
-            id:product.productId,
-            code:product.productCode,
+            id: product.productId,
+            code: product.productCode,
             unit: product.baseUnit,
             price: product.selling_price,
             specification: product.specification,
