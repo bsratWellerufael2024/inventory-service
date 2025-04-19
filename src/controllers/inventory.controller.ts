@@ -78,13 +78,36 @@ export class InventoryController {
     return csvBuffer; // ✅ No need to wrap it in `{ data: ... }`
   }
 
+  // @MessagePattern('inventory.getSummary')
+  // async getInventorySummary(
+  //   @Payload() data: { filter?: string; page?: number; limit?: number },
+  // ) {
+  //   const { filter, page = 1, limit = 100 } = data;
+  //   return await this.inventoryService.inventorySummary(filter, page, limit);
+  // }
+
   @MessagePattern('inventory.getSummary')
   async getInventorySummary(
     @Payload() data: { filter?: string; page?: number; limit?: number },
   ) {
-    const { filter, page = 1, limit = 100 } = data;
-    return await this.inventoryService.inventorySummary(filter, page, limit);
+    const page = data.page && data.page > 0 ? data.page : 1;
+    const limit = data.limit && data.limit > 0 ? data.limit : 100;
+    const filter = data.filter?.trim() || undefined;
+
+    // Call the service to get the inventory summary
+    const summary = await this.inventoryService.inventorySummary(
+      filter,
+      page,
+      limit,
+    );
+
+    return {
+      success: true,
+      message: 'Inventory summary with yearly report generated successfully',
+      data: summary,
+    };
   }
+
   @EventPattern('product.deleted')
   async handleProductDeleted(@Payload() data: { productId: number }) {
     this.logger.log(`Received product.deleted event: ${JSON.stringify(data)}`);

@@ -492,22 +492,183 @@ export class InventoryService implements OnModuleInit {
     });
   }
 
+  // async inventorySummary(filter?: string, page = 1, limit = 10) {
+  //   // Validate page and limit
+  //   if (page < 1) page = 1;
+  //   if (limit < 1) limit = 10;
+
+  //   // Generate a cache key based on the filter, page, and limit
+  //   const cacheKey = `inventory_summary:${filter || 'all'}:${page}:${limit}`;
+  //   const cachedData = await this.cacheManager.get(cacheKey);
+  //   console.log('CACHE HIT:', cachedData ? true : false);
+  //   if (cachedData) {
+  //     console.log('Returning cached result');
+  //     //  console.log(cachedData);
+  //     return cachedData;
+  //   }
+
+  //   // Fetch inventory and stock movement data if not in cache
+  //   const inventory = await this.inventoryRepository.find();
+  //   const productIds = inventory.map((product) => product.productId);
+
+  //   const stockMovements = await this.stockMovementRepository
+  //     .createQueryBuilder('stock_movement')
+  //     .select('productId')
+  //     .addSelect(`SUM(CASE WHEN type = 'IN' THEN quantity ELSE 0 END)`, 'inQty')
+  //     .addSelect(
+  //       `SUM(CASE WHEN type = 'OUT' THEN quantity ELSE 0 END)`,
+  //       'outQty',
+  //     )
+  //     .where('productId IN (:...productIds)', { productIds })
+  //     .groupBy('productId')
+  //     .getRawMany();
+
+  //   const stockMovementMap = new Map<
+  //     string,
+  //     { inQty: number; outQty: number }
+  //   >();
+  //   stockMovements.forEach((movement) => {
+  //     stockMovementMap.set(movement.productId, {
+  //       inQty: parseInt(movement.inQty, 10) || 0,
+  //       outQty: parseInt(movement.outQty, 10) || 0,
+  //     });
+  //   });
+
+  //   const productDetails = await this.productClient
+  //     .send('get_produts_details', { productIds })
+  //     .toPromise();
+
+  //   const filteredProducts = productDetails.filter((product) =>
+  //     filter
+  //       ? product.productName.toLowerCase().includes(filter.toLowerCase())
+  //       : true,
+  //   );
+
+  //   // Group products by category for quantity calculation
+  //   type CategoryGroup = {
+  //     category: string;
+  //     subTotal: number;
+  //     totalInQty: number;
+  //     totalOutQty: number;
+  //     products: {
+  //       productName: string;
+  //       id: number;
+  //       code: string;
+  //       unit: string;
+  //       price: number;
+  //       specification: string;
+  //       quantityAvailable: number;
+  //       inQty: number;
+  //       outQty: number;
+  //     }[];
+  //   };
+
+  //   const categoryGroups: Record<string, CategoryGroup> =
+  //     filteredProducts.reduce(
+  //       (acc, product) => {
+  //         const inventoryItem = inventory.find(
+  //           (inv) => inv.productId === product.productId,
+  //         );
+  //         const stockMovement = stockMovementMap.get(product.productId) || {
+  //           inQty: 0,
+  //           outQty: 0,
+  //         };
+  //         const category = product.category
+  //           ? product.category.category
+  //           : 'Uncategorized';
+  //         const quantityAvailable = inventoryItem
+  //           ? inventoryItem.quantityAvailable
+  //           : 0;
+
+  //         if (!acc[category]) {
+  //           acc[category] = {
+  //             category,
+  //             subTotal: 0,
+  //             totalInQty: 0,
+  //             totalOutQty: 0,
+  //             products: [],
+  //           };
+  //         }
+
+  //         acc[category].subTotal += quantityAvailable;
+  //         acc[category].totalInQty += stockMovement.inQty;
+  //         acc[category].totalOutQty += stockMovement.outQty;
+
+  //         acc[category].products.push({
+  //           productName: product.productName,
+  //           id: product.productId,
+  //           code: product.productCode,
+  //           unit: product.baseUnit,
+  //           price: product.selling_price,
+  //           specification: product.specification,
+  //           quantityAvailable,
+  //           inQty: stockMovement.inQty,
+  //           outQty: stockMovement.outQty,
+  //         });
+
+  //         return acc;
+  //       },
+  //       {} as Record<string, CategoryGroup>,
+  //     );
+
+  //   // Paginate the products within each category
+  //   Object.keys(categoryGroups).forEach((category) => {
+  //     const categoryGroup = categoryGroups[category];
+  //     const offset = (page - 1) * limit;
+  //     categoryGroup.products = categoryGroup.products.slice(
+  //       offset,
+  //       offset + limit,
+  //     );
+  //   });
+
+  //   // Flatten the products from all categories for pagination (if needed)
+  //   const allProducts = Object.values(categoryGroups).flatMap(
+  //     (categoryGroup) => categoryGroup.products,
+  //   );
+
+  //   // Calculate overall totals
+  //   const overallTotalQuantity = allProducts.reduce(
+  //     (sum, product) => sum + product.quantityAvailable,
+  //     0,
+  //   );
+  //   const overallTotalInQty = allProducts.reduce(
+  //     (sum, product) => sum + product.inQty,
+  //     0,
+  //   );
+  //   const overallTotalOutQty = allProducts.reduce(
+  //     (sum, product) => sum + product.outQty,
+  //     0,
+  //   );
+
+  //   // Prepare the result object
+  //   const result = {
+  //     success: true,
+  //     message: 'Inventory summary fetched successfully',
+  //     overallTotalQuantity,
+  //     overallTotalInQty,
+  //     overallTotalOutQty,
+  //     categories: Object.values(categoryGroups), // Return all category groups (not paginated)
+  //     products: allProducts, // Flattened paginated product list (if you need)
+  //   };
+
+  //   // Cache the result for subsequent requests
+  //   await (this.cacheManager as any).set(cacheKey, result, { ttl: 3600 });
+  //   console.log(`✅ Cached result with key: ${cacheKey}`);
+  //   return result;
+  // }
+
   async inventorySummary(filter?: string, page = 1, limit = 10) {
-    // Validate page and limit
     if (page < 1) page = 1;
     if (limit < 1) limit = 10;
 
-    // Generate a cache key based on the filter, page, and limit
     const cacheKey = `inventory_summary:${filter || 'all'}:${page}:${limit}`;
     const cachedData = await this.cacheManager.get(cacheKey);
     console.log('CACHE HIT:', cachedData ? true : false);
     if (cachedData) {
       console.log('Returning cached result');
-      //  console.log(cachedData);
       return cachedData;
     }
 
-    // Fetch inventory and stock movement data if not in cache
     const inventory = await this.inventoryRepository.find();
     const productIds = inventory.map((product) => product.productId);
 
@@ -544,7 +705,6 @@ export class InventoryService implements OnModuleInit {
         : true,
     );
 
-    // Group products by category for quantity calculation
     type CategoryGroup = {
       category: string;
       subTotal: number;
@@ -621,12 +781,10 @@ export class InventoryService implements OnModuleInit {
       );
     });
 
-    // Flatten the products from all categories for pagination (if needed)
     const allProducts = Object.values(categoryGroups).flatMap(
       (categoryGroup) => categoryGroup.products,
     );
 
-    // Calculate overall totals
     const overallTotalQuantity = allProducts.reduce(
       (sum, product) => sum + product.quantityAvailable,
       0,
@@ -640,18 +798,93 @@ export class InventoryService implements OnModuleInit {
       0,
     );
 
-    // Prepare the result object
+    // ✅ Add yearly stock movement aggregation for reporting
+    const yearlyMovements = await this.stockMovementRepository
+      .createQueryBuilder('stock_movement')
+      .select(`EXTRACT(YEAR FROM stock_movement.createdAt)`, 'year')
+      .addSelect(`SUM(CASE WHEN type = 'IN' THEN quantity ELSE 0 END)`, 'inQty')
+      .addSelect(
+        `SUM(CASE WHEN type = 'OUT' THEN quantity ELSE 0 END)`,
+        'outQty',
+      )
+      .where('productId IN (:...productIds)', { productIds })
+      .groupBy('year')
+      .orderBy('year', 'ASC')
+      .getRawMany();
+
+    // Fill in missing years with zero values
+    const allYears = Array.from(
+      new Set(yearlyMovements.map((entry) => entry.year)),
+    );
+    const currentYear = new Date().getFullYear();
+    const completeYearlySummary = [];
+
+    for (let year = currentYear; year >= Math.min(...allYears); year--) {
+      const entry = yearlyMovements.find((e) => parseInt(e.year, 10) === year);
+      if (entry) {
+        completeYearlySummary.push({
+          year: year,
+          inQty: parseInt(entry.inQty, 10),
+          outQty: parseInt(entry.outQty, 10),
+        });
+      } else {
+        completeYearlySummary.push({
+          year: year,
+          inQty: 0,
+          outQty: 0,
+        });
+      }
+    }
+
+    // ✅ Add bi-monthly stock movement aggregation for the current year (2025)
+    const biMonthlyMovements = await this.stockMovementRepository
+      .createQueryBuilder('stock_movement')
+      .select([
+        `FLOOR((EXTRACT(MONTH FROM stock_movement.createdAt) - 1) / 2) + 1 AS period`,
+        `SUM(CASE WHEN type = 'IN' THEN quantity ELSE 0 END) AS inQty`,
+        `SUM(CASE WHEN type = 'OUT' THEN quantity ELSE 0 END) AS outQty`,
+      ])
+      .where('productId IN (:...productIds)', { productIds })
+      .andWhere(`EXTRACT(YEAR FROM stock_movement.createdAt) = :year`, {
+        year: 2025,
+      }) // You can make 2025 dynamic if needed
+      .groupBy('period')
+      .orderBy('period', 'ASC')
+      .getRawMany();
+
+    const monthLabels = [
+      'Jan–Feb',
+      'Mar–Apr',
+      'May–Jun',
+      'Jul–Aug',
+      'Sep–Oct',
+      'Nov–Dec',
+    ];
+
+    // Fill in missing periods with zero values
+    const completeBiMonthlySummary = monthLabels.map((label, index) => {
+      const entry = biMonthlyMovements.find(
+        (e) => parseInt(e.period) - 1 === index,
+      );
+      return {
+        period: label,
+        inQty: entry ? parseInt(entry.inQty, 10) : 0,
+        outQty: entry ? parseInt(entry.outQty, 10) : 0,
+      };
+    });
+
     const result = {
       success: true,
       message: 'Inventory summary fetched successfully',
       overallTotalQuantity,
       overallTotalInQty,
       overallTotalOutQty,
-      categories: Object.values(categoryGroups), // Return all category groups (not paginated)
-      products: allProducts, // Flattened paginated product list (if you need)
+      categories: Object.values(categoryGroups),
+      products: allProducts,
+      yearlySummary: completeYearlySummary, // ✅ Updated yearly summary with 0 values
+      biMonthlySummary: completeBiMonthlySummary, // ✅ Updated bi-monthly summary with 0 values
     };
 
-    // Cache the result for subsequent requests
     await (this.cacheManager as any).set(cacheKey, result, { ttl: 3600 });
     console.log(`✅ Cached result with key: ${cacheKey}`);
     return result;
