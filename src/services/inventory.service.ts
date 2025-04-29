@@ -224,32 +224,44 @@ export class InventoryService implements OnModuleInit {
         activatedBy,
       });
 
-    // ✅ Time range filter
-    const now = moment();
-    if (timeRange) {
+    const now = moment.utc(); // 🚀 use UTC to match database timezone (important!)
+
+    if (timeRange && !startDate && !endDate) {
+      // ⛔ only apply timeRange if startDate and endDate are NOT provided
       let start: moment.Moment;
+      let end: moment.Moment;
+
       switch (timeRange) {
         case 'daily':
           start = now.clone().startOf('day');
+          end = now.clone().endOf('day');
           break;
         case 'weekly':
-          start = now.clone().startOf('week');
+          start = now.clone().subtract(7, 'days').startOf('day'); // 🔥 changed here
+          end = now.clone().endOf('day'); // 🔥 changed here
           break;
         case 'monthly':
           start = now.clone().startOf('month');
+          end = now.clone().endOf('month');
           break;
         case 'yearly':
           start = now.clone().startOf('year');
+          end = now.clone().endOf('year');
           break;
         default:
           start = null;
+          end = null;
       }
-      if (start)
-        query.andWhere('stockMovement.createdAt >= :start', {
+
+      if (start && end) {
+        query.andWhere('stockMovement.createdAt BETWEEN :start AND :end', {
           start: start.toISOString(),
+          end: end.toISOString(),
         });
+      }
     }
 
+    // If user provides startDate and endDate manually, apply them (override timeRange)
     if (startDate)
       query.andWhere('stockMovement.createdAt >= :startDate', { startDate });
     if (endDate)

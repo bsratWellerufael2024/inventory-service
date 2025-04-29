@@ -38,7 +38,7 @@ export class InventoryController {
       activatedBy?: string;
       startDate?: string;
       endDate?: string;
-      timeRange?: 'daily' | 'weekly' | 'monthly' | 'yearly'; // ✅ Add this
+      timeRange?: 'daily' | 'weekly' | 'monthly' | 'yearly';
       page?: number;
       limit?: number;
     },
